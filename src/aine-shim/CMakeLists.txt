@@ -4,6 +4,7 @@ set(SHIM_COMMON_SOURCES common/logging.c common/aine-shim.c)
 
 if(AINE_PLATFORM_MACOS)
     set(SHIM_PLATFORM_SOURCES
+        macos/platform.c
         macos/epoll.c macos/proc.c macos/futex.c macos/ashmem.c
         macos/eventfd.c macos/timerfd.c macos/inotify.c
         macos/signalfd.c macos/prctl.c macos/binder-dev.c)

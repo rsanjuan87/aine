@@ -1,0 +1,4 @@
+[submodule "vendor/atl"]
+	path = vendor/atl
+	url = https://gitlab.com/android_translation_layer/android_translation_layer.git
+	shallow = true

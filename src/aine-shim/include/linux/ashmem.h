@@ -1,4 +1,6 @@
 #pragma once
+#include <sys/ioctl.h>  // AINE: _IOW/_IO macros (macOS sys/ioccom.h)
+#include <stddef.h>      // size_t
 #define ASHMEM_NAME_LEN   256
 #define __ASHMEMIOC       0x77
 #define ASHMEM_SET_SIZE   _IOW(__ASHMEMIOC, 3, size_t)

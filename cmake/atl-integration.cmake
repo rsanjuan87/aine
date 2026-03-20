@@ -4,11 +4,10 @@
 set(ATL_DIR "${CMAKE_SOURCE_DIR}/vendor/atl"
     CACHE PATH "Ruta al directorio de ATL (submódulo)")
 
-if(NOT EXISTS "${ATL_DIR}/CMakeLists.txt")
+if(NOT EXISTS "${ATL_DIR}/meson.build")
     message(WARNING
         "[AINE] vendor/atl/ no encontrado o vacío. "
-        "Ejecuta: git submodule update --init --recursive\n"
-        "O: ./scripts/init.sh")
+        "Copia o clona ATL en vendor/atl/ (ATL usa Meson, no CMake).")
     # No hacer FATAL_ERROR — permite compilar aine-shim sin ATL completo
     return()
 endif()
@@ -44,7 +43,7 @@ function(aine_link_atl target)
 endfunction()
 
 # ─── Exportar variable ATL_DIR para subdirectorios ─────────────────────────
-set(ATL_DIR "${ATL_DIR}" PARENT_SCOPE)
+# Nota: incluido via include() desde root — ATL_DIR ya es visible en todo el scope
 
 # ─── Información del commit de ATL ─────────────────────────────────────────
 execute_process(
