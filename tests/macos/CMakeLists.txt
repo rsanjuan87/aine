@@ -21,3 +21,15 @@ set_tests_properties(surface-egl-headless PROPERTIES
     PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
 )
 
+# F8: Input HAL test (headless — keymap + queue, no NSEvent needed)
+add_executable(test-input test_input.c)
+target_link_libraries(test-input PRIVATE aine-input-core)
+add_dependencies(test-input aine-input-core)
+
+add_test(NAME input-hal COMMAND test-input)
+set_tests_properties(input-hal PROPERTIES
+    TIMEOUT 10
+    LABELS  "input;f8;macos"
+    PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
+)
+
