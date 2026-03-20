@@ -18,6 +18,7 @@
 
 // AINE: implementación de prctl para macOS
 // Solo las opciones que Android/ART realmente usa
+__attribute__((visibility("default")))
 int aine_prctl(int option, unsigned long arg2, unsigned long arg3,
                unsigned long arg4, unsigned long arg5) {
     (void)arg3; (void)arg4; (void)arg5;
@@ -56,6 +57,7 @@ int aine_prctl(int option, unsigned long arg2, unsigned long arg3,
 // Linux: int pthread_setname_np(pthread_t thread, const char *name)
 // macOS: int pthread_setname_np(const char *name)  ← solo hilo actual
 // Android siempre llama desde el propio hilo, así que el shim es correcto.
+__attribute__((visibility("default")))
 int aine_pthread_setname_np(pthread_t thread, const char *name) {
     if (thread == pthread_self()) {
         char buf[64];

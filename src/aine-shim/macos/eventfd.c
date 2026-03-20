@@ -22,7 +22,7 @@ typedef struct {
 static eventfd_ctx_t efd_table[EVENTFD_TABLE_SIZE];
 
 // Devuelve el fd de lectura del pipe como "eventfd fd"
-int eventfd(unsigned int initval, int flags) {
+AINE_PUBLIC int eventfd(unsigned int initval, int flags) {
     int pipefd[2];
     if (pipe(pipefd) < 0) return -1;
 
@@ -53,7 +53,7 @@ int eventfd(unsigned int initval, int flags) {
     return pipefd[0];
 }
 
-int eventfd_read(int fd, uint64_t *value) {
+AINE_PUBLIC int eventfd_read(int fd, uint64_t *value) {
     int idx = fd % EVENTFD_TABLE_SIZE;
     if (!efd_table[idx].used || efd_table[idx].pipefd[0] != fd) {
         errno = EBADF; return -1;
@@ -72,7 +72,7 @@ int eventfd_read(int fd, uint64_t *value) {
     return 0;
 }
 
-int eventfd_write(int fd, uint64_t value) {
+AINE_PUBLIC int eventfd_write(int fd, uint64_t value) {
     int idx = fd % EVENTFD_TABLE_SIZE;
     if (!efd_table[idx].used || efd_table[idx].pipefd[0] != fd) {
         errno = EBADF; return -1;

@@ -36,17 +36,17 @@ static epoll_ctx_t *get_or_create_ctx(int epfd) {
     return ctx_table[idx];
 }
 
-int epoll_create(int size) {
+AINE_PUBLIC int epoll_create(int size) {
     (void)size;
     return kqueue();
 }
 
-int epoll_create1(int flags) {
+AINE_PUBLIC int epoll_create1(int flags) {
     (void)flags; // AINE: EPOLL_CLOEXEC ignorado — kqueue es close-on-exec por defecto en Darwin
     return kqueue();
 }
 
-int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
+AINE_PUBLIC int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
     struct kevent changes[2];
     int nchanges = 0;
 
@@ -86,7 +86,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
     return kevent(epfd, changes, nchanges, NULL, 0, NULL);
 }
 
-int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout) {
+AINE_PUBLIC int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout) {
     if (maxevents <= 0) { errno = EINVAL; return -1; }
     struct timespec ts, *tsp = NULL;
     if (timeout >= 0) {

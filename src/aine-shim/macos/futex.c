@@ -42,6 +42,7 @@ static futex_entry_t *get_or_create_entry(uintptr_t addr) {
 }
 
 // AINE: syscall(SYS_futex, ...) roteado aquí vía interposición de aine-shim
+__attribute__((visibility("default")))
 long aine_futex(int *uaddr, int futex_op, int val,
                 const struct timespec *timeout, int *uaddr2, int val3) {
     (void)uaddr2; (void)val3;
