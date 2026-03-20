@@ -15,6 +15,7 @@ Cada bloqueante está clasificado por severidad y tiene una estrategia de resolu
 | B5 — Linux headers en macOS | ✅ Stubs creados | M0 |
 | B6 — ART standalone macOS | ⚠️ Workaround: adb bridge. Nativo pendiente | M1 |
 | B7 — Binder IPC | ✅ Unix socket transport (M2) | M2 |
+| B8 — Activity lifecycle | ✅ aine-launcher + adb bridge (M3) | M3 |
 
 ---
 

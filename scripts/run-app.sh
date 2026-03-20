@@ -274,6 +274,94 @@ cmd_run() {
 }
 
 # =============================================================================
+# --m3-build: compilar M3TestApp.apk
+# =============================================================================
+cmd_m3_build() {
+  M3_DIR="$ROOT_DIR/test-apps/M3TestApp"
+  [[ ! -d "$M3_DIR" ]] && err "Directorio M3TestApp no encontrado: $M3_DIR"
+  log "Compilando M3TestApp.apk..."
+  bash "$M3_DIR/build.sh"
+  ok "M3TestApp.apk listo"
+}
+
+# =============================================================================
+# --m3-install <apk>: instalar APK via aine-launcher
+# =============================================================================
+cmd_m3_install() {
+  local APK="${1:-$ROOT_DIR/test-apps/M3TestApp/M3TestApp.apk}"
+  [[ ! -f "$APK" ]] && {
+    warn "APK no encontrado. Compilando M3TestApp primero..."
+    cmd_m3_build
+  }
+
+  LAUNCHER=$(find "$BUILD_DIR" -name "aine-launcher" -type f 2>/dev/null | head -1)
+  if [[ -z "$LAUNCHER" ]]; then
+    warn "aine-launcher no compilado. Compilando..."
+    "$SCRIPT_DIR/build.sh" 2>&1 | tail -5
+    LAUNCHER=$(find "$BUILD_DIR" -name "aine-launcher" -type f 2>/dev/null | head -1)
+    [[ -z "$LAUNCHER" ]] && err "aine-launcher no encontrado tras compilar"
+  fi
+
+  log "Instalando $APK via aine-launcher..."
+  "$LAUNCHER" install "$APK"
+  ok "APK instalado"
+}
+
+# =============================================================================
+# --m3-launch <apk>: lanzar Activity via aine-launcher
+# =============================================================================
+cmd_m3_launch() {
+  local APK="${1:-$ROOT_DIR/test-apps/M3TestApp/M3TestApp.apk}"
+  [[ ! -f "$APK" ]] && err "APK no encontrado: $APK. Usa --m3-build primero."
+
+  LAUNCHER=$(find "$BUILD_DIR" -name "aine-launcher" -type f 2>/dev/null | head -1)
+  [[ -z "$LAUNCHER" ]] && err "aine-launcher no compilado. Ejecuta build.sh primero."
+
+  log "Lanzando Activity de $APK..."
+  "$LAUNCHER" launch "$APK"
+}
+
+# =============================================================================
+# --m3 [apk]: ciclo de vida completo M3 — build + install + lifecycle
+# =============================================================================
+cmd_m3() {
+  local APK="${1:-$ROOT_DIR/test-apps/M3TestApp/M3TestApp.apk}"
+
+  # Compilar APK si no existe
+  if [[ ! -f "$APK" ]]; then
+    warn "M3TestApp.apk no encontrado. Compilando..."
+    cmd_m3_build
+  fi
+
+  # Compilar aine-launcher si no existe
+  LAUNCHER=$(find "$BUILD_DIR" -name "aine-launcher" -type f 2>/dev/null | head -1)
+  if [[ -z "$LAUNCHER" ]]; then
+    warn "aine-launcher no compilado. Compilando AINE..."
+    "$SCRIPT_DIR/build.sh" 2>&1 | tail -5
+    LAUNCHER=$(find "$BUILD_DIR" -name "aine-launcher" -type f 2>/dev/null | head -1)
+    [[ -z "$LAUNCHER" ]] && err "aine-launcher no encontrado tras compilar"
+  fi
+
+  log "=== AINE M3 — Test de ciclo de vida ==="
+  log "APK:      $APK"
+  log "Launcher: $LAUNCHER"
+  echo ""
+
+  "$LAUNCHER" lifecycle "$APK"
+  local rc=$?
+
+  if [[ $rc -eq 0 ]]; then
+    echo ""
+    ok "M3 completado — ciclo de vida Android funcional ✓"
+    ok "Criterio M3: 'una app Android completa su ciclo de vida sin crash'"
+  else
+    echo ""
+    err "M3 FALLÓ — el ciclo de vida no se completó correctamente"
+  fi
+  return $rc
+}
+
+# =============================================================================
 # Punto de entrada
 # =============================================================================
 case "${1:-}" in
@@ -281,12 +369,22 @@ case "${1:-}" in
   --test-binder) cmd_test_binder ;;
   --list)        cmd_list ;;
   --install)     [[ -z "${2:-}" ]] && err "Uso: --install <ruta.apk>"; cmd_install "$2" ;;
+  --m3-build)    cmd_m3_build ;;
+  --m3-install)  cmd_m3_install "${2:-}" ;;
+  --m3-launch)   cmd_m3_launch "${2:-}" ;;
+  --m3)          cmd_m3 "${2:-}" ;;
   --help|-h)
     echo "Uso: $0 <app.apk> [--debug]"
     echo "     $0 --list"
     echo "     $0 --install <app.apk>"
     echo "     $0 --test-art"
     echo "     $0 --test-binder"
+    echo ""
+    echo "M3 — ciclo de vida Android:"
+    echo "     $0 --m3-build               # compilar M3TestApp.apk"
+    echo "     $0 --m3-install [apk]       # instalar APK en emulador"
+    echo "     $0 --m3-launch [apk]        # lanzar Activity"
+    echo "     $0 --m3 [apk]               # test completo de ciclo de vida"
     ;;
   "")
     err "Especifica un APK o usa --help"

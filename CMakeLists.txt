@@ -33,6 +33,7 @@ include(cmake/atl-integration.cmake)
 add_subdirectory(src/aine-shim)
 add_subdirectory(src/aine-binder)
 add_subdirectory(src/aine-hals)
+add_subdirectory(src/aine-launcher)
 
 enable_testing()
 add_subdirectory(tests)

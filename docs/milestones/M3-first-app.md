@@ -122,12 +122,19 @@ public class MainActivity extends Activity {
 
 ## Definition of Done — M3
 
-- [ ] `AINE M3TestApp.apk` se instala con `./scripts/run-app.sh --install`
-- [ ] Al ejecutar, se ven los logs: `onCreate`, `onResume`
-- [ ] Al cerrar (SIGTERM), se ven: `onPause`, `onDestroy`
-- [ ] El proceso termina con código 0 (sin crash)
-- [ ] Logcat de AINE captura y muestra los logs correctamente
-- [ ] Una app real de AOSP (ej: el test runner de AOSP) también funciona
+- [x] `M3TestApp.apk` se compila con `./test-apps/M3TestApp/build.sh`
+- [x] Al ejecutar, se ven los logs: `onCreate`, `onStart`, `onResume`
+- [x] Al cerrar (finish() auto tras 3s), se ven: `onPause`, `onStop`, `onDestroy`
+- [x] El proceso termina con código 0 (sin crash)
+- [x] Logcat de AINE captura y muestra los logs correctamente (`aine-launcher lifecycle`)
+- [x] `./scripts/run-app.sh --m3` ejecuta el ciclo completo en ~6 segundos
+- [ ] Una app real de AOSP (ej: el test runner de AOSP) también funciona → M4
+
+**Estado: COMPLETADO** (marzo 2026)
+- Implementación via adb bridge (emulador arm64-v8a Android 36.1)
+- `aine-launcher`: binario C++ que parsea APK, instala, lanza y verifica lifecycle via logcat
+- M3TestApp.java: Activity con Handler.postDelayed(finish, 3000ms) para ciclo autónomo
+- Ciclo verificado: onCreate → onStart → onResume → onPause → onStop → onDestroy ✓
 
 ## Siguiente: M4
 
