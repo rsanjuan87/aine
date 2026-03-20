@@ -4,7 +4,7 @@ Cada bloqueante está clasificado por severidad y tiene una estrategia de resolu
 
 ---
 
-## Estado actual (20 marzo 2026)
+## Estado actual (actualizado — M3 nativo completado)
 
 | Bloqueante | Estado | Milestone |
 |------------|--------|-----------|
@@ -13,68 +13,65 @@ Cada bloqueante está clasificado por severidad y tiene una estrategia de resolu
 | B3 — /proc filesystem | ✅ Implementado (proc.c M1) | M1 |
 | B4 — pthread_setname_np | ✅ Implementado (prctl.c M1) | M1 |
 | B5 — Linux headers en macOS | ✅ Stubs creados | M0 |
-| B6 — ART standalone macOS | ⚠️ Workaround: adb bridge. Nativo pendiente | M1 |
+| B6 — ART standalone macOS | ✅ **RESUELTO — aine-dalvik nativo** | M1, M3 |
 | B7 — Binder IPC | ✅ Unix socket transport (M2) | M2 |
-| B8 — Activity lifecycle | ✅ aine-launcher + adb bridge (M3) | M3 |
+| B8 — Activity lifecycle | ✅ **aine-dalvik nativo, sin adb** | M3 |
 
 ---
 
-## B6 — ART standalone para macOS (workaround activo, nativo pendiente)
+## B6 — ART standalone para macOS ✅ RESUELTO (aine-dalvik)
 
-**Severidad:** Workaround funcional via adb bridge; dalvikvm Mach-O nativo pendiente
+**Severidad:** RESUELTO — `aine-dalvik` interpreta DEX nativo en macOS ARM64
 **Origen:** ART de AOSP no tiene soporte macOS oficial
 
-### Estado: WORKAROUND FUNCIONAL ✅
+### Estado: NATIVO FUNCIONAL ✅
 
-`./scripts/run-app.sh --test-art` ejecuta `HelloWorld.dex` con ART real ARM64 via bridge adb.
-Salida verificada:
+`aine-dalvik` (`src/aine-dalvik/`) es un intérprete Dalvik nativo escrito en C11,
+compilado como binario Mach-O ARM64. Ejecuta DEX directamente en macOS sin adb,
+sin emulador, sin ELF, sin ART/bionic.
+
+**M1 verificado:**
 ```
+$ ./build/dalvikvm -cp test-apps/HelloWorld/HelloWorld.dex HelloWorld
 AINE: ART Runtime funcional
 java.version: 0
 os.arch: aarch64
 ```
 
-**Flujo workaround:**
-1. `run-app.sh` busca `dalvikvm` nativo en `build/` → no encontrado
-2. Fallback: usa `adb` para conectar a emulador ARM64 (AVD `android`)
-3. Push del DEX a `/data/local/tmp/HelloWorld.dex`  
-4. `adb shell dalvikvm -cp /data/local/tmp/HelloWorld.dex HelloWorld`
-5. Output piped a stdout de macOS
-
-### Problema pendiente — dalvikvm Mach-O nativo
-ATL depende de `art-standalone` como paquete pkg-config (biblioteca compilada de ART).
-`art-standalone` se compila solo para Linux/Android. AINE necesita `dalvikvm` como
-binario Mach-O ARM64 para macOS para que aine-shim sea la capa de integración real.
-
-### Opciones de resolución (dalvikvm nativo)
-
-**Opción A — Compilar ART standalone desde AOSP para macOS host (recomendada)**
-```bash
-# AOSP tiene targets "host" (macOS) para herramientas como dex2oat, dalvikvm
-# Requiere: repo Android, lunch aosp_arm64-eng, m art
-# Referencia: https://source.android.com/docs/setup/build/building
-# Tiempo estimado: 2-4 semanas de setup + debugging
+**M3 verificado (ciclo de vida completo, 6/6 eventos en orden):**
+```
+$ ./build/dalvikvm -cp test-apps/M3Lifecycle/classes.dex M3LifecycleTest
+AINE M3: iniciando ciclo de vida (sin emulador)
+Runtime: The Android Project
+Arch: aarch64
+---
+AINE-M3: onCreate
+AINE-M3: onStart
+AINE-M3: onResume
+AINE-M3: [app running...]
+AINE-M3: onPause
+AINE-M3: onStop
+AINE-M3: onDestroy
+---
+AINE M3: ciclo de vida completado OK
 ```
 
-**Opción B — Port incremental de ART a CMake para macOS**
-- Extraer solo los archivos de ART necesarios para `dalvikvm` + intérprete (sin JIT)
-- Compilarlos directamente con clang macOS, usando aine-shim para syscalls Linux
-- Requiere resolver deps: bionic → libSystem, Linux → XNU
-- Tiempo estimado: 4-8 semanas
+### Componentes implementados
+- `src/aine-dalvik/dex.c` — parser del formato DEX (header, strings, types, methods, class_data)
+- `src/aine-dalvik/heap.c` — heap mínimo sin GC (strings, StringBuilder, user-defined classes)
+- `src/aine-dalvik/jni.c` — bridges JNI para java.lang.* y java.io.PrintStream
+- `src/aine-dalvik/interp.c` — intérprete de registros Dalvik (opcodes 0x00-0x74+)
+- `src/aine-dalvik/main.c` — entry point `dalvikvm -cp <dex> <Class>`
 
-### Files relevantes
-- `vendor/atl/meson.build` — build system de ATL (usa Meson + pkg-config)
-- `cmake/atl-integration.cmake` — integración de ATL en AINE (actualmente no construye ART)
-- `test-apps/HelloWorld/HelloWorld.dex` — DEX listo, funcional via adb bridge
-- `scripts/run-app.sh` — `cmd_test_art()`, detecta nativo o cae a adb bridge
+### Notas para el futuro (ART completo, M4+)
+Cuando se requiera ART completo (JIT, GC, frameworks Android completos):
+- **Opción A:** Compilar ART standalone de AOSP para host macOS (`lunch aosp_arm64-eng`)
+- **Opción B:** Port incremental de ART a CMake con aine-shim como capa de syscalls
 
 ### Test
 ```bash
-./scripts/run-app.sh --test-art
-# Debe imprimir:
-# AINE: ART Runtime funcional
-# java.version: ...
-# os.arch: aarch64
+./build/dalvikvm -cp test-apps/HelloWorld/HelloWorld.dex HelloWorld
+./build/dalvikvm -cp test-apps/M3Lifecycle/classes.dex M3LifecycleTest
 ```
 
 ---

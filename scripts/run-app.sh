@@ -45,105 +45,51 @@ check_build() {
 # --test-art: probar ART con un DEX mínimo
 # =============================================================================
 cmd_test_art() {
-  log "Test de ART Runtime..."
+  log "Test de ART Runtime (nativo — aine-dalvik)..."
 
-  # Crear HelloWorld.java minimal
-  TMPDIR=$(mktemp -d)
-  cat > "$TMPDIR/HelloWorld.java" << 'JAVA_EOF'
+  # Usar HelloWorld.dex precompilado del repo
+  PREBUILT_DEX="$ROOT_DIR/test-apps/HelloWorld/HelloWorld.dex"
+  DEX_PATH=""
+
+  if [[ -f "$PREBUILT_DEX" ]]; then
+    log "Usando HelloWorld.dex precompilado: $PREBUILT_DEX"
+    DEX_PATH="$PREBUILT_DEX"
+  else
+    # Compilar HelloWorld.dex si no existe precompilado
+    TMPDIR_LOCAL=$(mktemp -d)
+    cat > "$TMPDIR_LOCAL/HelloWorld.java" << 'JAVA_EOF'
 public class HelloWorld {
     public static void main(String[] args) {
         System.out.println("AINE: ART Runtime funcional");
-        System.out.println("Java version: " + System.getProperty("java.version"));
-        System.out.println("Architecture: " + System.getProperty("os.arch"));
+        System.out.println("java.version: " + System.getProperty("java.version"));
+        System.out.println("os.arch: " + System.getProperty("os.arch"));
     }
 }
 JAVA_EOF
+    D8=$(find "${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools" -name "d8" 2>/dev/null | sort -V | tail -1)
+    [[ -z "$D8" ]] && err "HelloWorld.dex no encontrado y d8 no disponible. Ejecuta: git lfs pull o instala Android SDK."
+    javac "$TMPDIR_LOCAL/HelloWorld.java" -d "$TMPDIR_LOCAL/"
+    "$D8" --output "$TMPDIR_LOCAL/HelloWorld.zip" "$TMPDIR_LOCAL/HelloWorld.class"
+    unzip -o "$TMPDIR_LOCAL/HelloWorld.zip" classes.dex -d "$TMPDIR_LOCAL/" >/dev/null
+    DEX_PATH="$TMPDIR_LOCAL/classes.dex"
+  fi
 
-  # Usar HelloWorld.dex precompilado del repo si existe
-  PREBUILT_DEX="$ROOT_DIR/test-apps/HelloWorld/HelloWorld.dex"
-  if [[ -f "$PREBUILT_DEX" ]]; then
-    log "Usando HelloWorld.dex precompilado: $PREBUILT_DEX"
-    cp "$PREBUILT_DEX" "$TMPDIR/classes.dex"
+  # Buscar dalvikvm nativo (aine-dalvik — Mach-O ARM64, sin emulador)
+  DALVIKVM=$(find "$BUILD_DIR" -name "dalvikvm" -type f 2>/dev/null | head -1)
+  if [[ -z "$DALVIKVM" ]]; then
+    err "dalvikvm no encontrado en $BUILD_DIR. Compila primero: ./scripts/build.sh"
+  fi
+
+  log "Ejecutando HelloWorld.dex con aine-dalvik nativo (sin emulador)..."
+  DYLD_INSERT_LIBRARIES="$BUILD_DIR/src/aine-shim/libaine-shim.dylib" \
+  "$DALVIKVM" -cp "$DEX_PATH" HelloWorld
+  local rc=$?
+
+  if [[ $rc -eq 0 ]]; then
+    ok "M1 completado — aine-dalvik ejecuta DEX nativo en macOS ARM64 (sin emulador)"
   else
-    # Buscar d8 en Android SDK
-    D8=""
-    if command -v d8 &>/dev/null; then
-      D8="d8"
-    else
-      # Buscar en ubicaciones comunes del Android SDK
-      for sdk_path in \
-          "$HOME/Library/Android/sdk/build-tools" \
-          "$ANDROID_HOME/build-tools" \
-          "$ANDROID_SDK_ROOT/build-tools"; do
-        D8=$(find "$sdk_path" -name "d8" 2>/dev/null | sort -V | tail -1)
-        [[ -n "$D8" ]] && break
-      done
-    fi
-    [[ -z "$D8" ]] && err "d8 no encontrado. Instala Android SDK o usa: brew install android-commandlinetools"
-
-    log "Compilando HelloWorld.java → HelloWorld.dex con $D8..."
-    javac "$TMPDIR/HelloWorld.java" -d "$TMPDIR/"
-    "$D8" --output "$TMPDIR/HelloWorld.zip" "$TMPDIR/HelloWorld.class"
-    unzip -o "$TMPDIR/HelloWorld.zip" classes.dex -d "$TMPDIR/" >/dev/null
+    err "dalvikvm salió con código $rc"
   fi
-
-  # Buscar dalvikvm nativo (M1 completo: ART compilado como Mach-O para macOS)
-  DALVIKVM=$(find "$BUILD_DIR" -name "dalvikvm" 2>/dev/null | head -1)
-  if [[ -n "$DALVIKVM" ]]; then
-    log "Ejecutando con ART nativo (Mach-O dalvikvm)..."
-    DYLD_INSERT_LIBRARIES="$BUILD_DIR/src/aine-shim/libaine-shim.dylib" \
-    AINE_LOG_LEVEL="${AINE_LOG_LEVEL:-info}" \
-    "$DALVIKVM" \
-      -Xnoimage-dex2oat \
-      -Xusejit:false \
-      -cp "$TMPDIR/classes.dex" \
-      HelloWorld
-    ok "Test ART completado (dalvikvm nativo)"
-    rm -rf "$TMPDIR"
-    return
-  fi
-
-  # Fallback: adb bridge — usa dalvikvm dentro del emulador/dispositivo ARM64
-  # B6 workaround: arm64-v8a ART via adb shell hasta que tengamos Mach-O dalvikvm
-  warn "dalvikvm nativo no disponible (B6 pendiente). Usando bridge adb..."
-  ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
-  if [[ ! -x "$ADB" ]]; then
-    err "adb no encontrado. Instala Android SDK. Ver docs/blockers.md#b6"
-  fi
-
-  # Arrancar servidor adb si no está activo
-  "$ADB" start-server &>/dev/null
-
-  # Encontrar emulador ARM64 disponible
-  SERIAL=$("$ADB" devices | awk '/device$/ {print $1}' | head -1)
-  if [[ -z "$SERIAL" ]]; then
-    log "No hay dispositivo/emulador conectado. Arrancando AVD..."
-    EMULATOR="${ANDROID_HOME:-$HOME/Library/Android/sdk}/emulator/emulator"
-    AVD=$("$EMULATOR" -list-avds 2>/dev/null | head -1)
-    [[ -z "$AVD" ]] && err "No hay AVDs disponibles. Crea uno en Android Studio."
-    "$EMULATOR" -avd "$AVD" -no-window -no-audio -no-snapshot-save &>/dev/null &
-    log "Esperando boot del emulador ($AVD)..."
-    for i in {1..30}; do
-      SERIAL=$("$ADB" devices | awk '/emulator.*device$/ {print $1}' | head -1)
-      [[ -n "$SERIAL" ]] && break
-      sleep 5
-    done
-    [[ -z "$SERIAL" ]] && err "Emulador no arrancó a tiempo."
-    for i in {1..24}; do
-      boot=$("$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-      [[ "$boot" == "1" ]] && break
-      sleep 5
-    done
-  fi
-
-  DEX_REMOTE="/data/local/tmp/HelloWorld.dex"
-  log "Usando dispositivo: $SERIAL"
-  "$ADB" -s "$SERIAL" push "$TMPDIR/classes.dex" "$DEX_REMOTE" &>/dev/null
-  log "Ejecutando HelloWorld.dex via dalvikvm (arm64-v8a ART, bridge adb)..."
-  "$ADB" -s "$SERIAL" shell dalvikvm -cp "$DEX_REMOTE" HelloWorld
-
-  ok "Test ART completado (via adb bridge — B6 workaround)"
-  rm -rf "$TMPDIR"
 }
 
 # =============================================================================
