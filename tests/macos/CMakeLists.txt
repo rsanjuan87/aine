@@ -51,3 +51,10 @@ set_tests_properties(audio-hal PROPERTIES
     PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
 )
 
+# F10: Launcher test — aine-run --list exits 0 (even with empty registry)
+add_test(NAME launcher-run COMMAND aine-run --list)
+set_tests_properties(launcher-run PROPERTIES
+    TIMEOUT 10
+    LABELS  "launcher;f10;macos"
+)
+

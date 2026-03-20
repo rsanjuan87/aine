@@ -557,15 +557,15 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F4 | PackageManager mínimo (APK parser) | ✅ |
 | F5 | Loader de libs nativas (.so ARM64) | ✅ |
 | F6 | ART completo (aine-dalvik Ruta B: opcodes + JNI) | ✅ |
-| F7 | Gráficos: ANGLE + Metal | ⬜ |
-| F8 | Input: teclado y ratón | ⬜ |
-| F9 | Audio: CoreAudio HAL | ⬜ |
-| F10 | aine-run: lanzador de APKs | ⬜ |
+| F7 | Gráficos: EGL/Metal + GLES2 + Surface + VSync | ✅ |
+| F8 | Input: teclado y ratón (NSEvent→KeyEvent/MotionEvent) | ✅ |
+| F9 | Audio: CoreAudio HAL (AudioUnit + AudioTrack) | ✅ |
+| F10 | aine-run: lanzador AINE-nativo de APKs | ✅ |
 | F11 | Primera app visual real | ⬜ |
 | F12 | Optimización + beta pública | ⬜ |
 
-**Próximo paso: F7 — Gráficos: ANGLE + Metal**
+**Próximo paso: F11 — Primera app visual real**
 
 ---
 
-*Actualizado: 20 marzo 2026 — F0→F6 completadas, F7 es el siguiente paso*
+*Actualizado: 20 marzo 2026 — F0→F10 completadas, F11 es el siguiente paso*

@@ -8,4 +8,15 @@ if(AINE_PLATFORM_MACOS)
     )
     set_target_properties(aine-launcher PROPERTIES CXX_STANDARD 17)
     install(TARGETS aine-launcher DESTINATION bin)
+
+    # F10: aine-run — AINE-native APK launcher (posix_spawn + pm/apk)
+    add_executable(aine-run aine-run.c)
+    target_include_directories(aine-run PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/aine-pm
+    )
+    target_link_libraries(aine-run PRIVATE aine-pm-lib)
+    target_compile_options(aine-run PRIVATE
+        -Wall -Wextra -Wno-unused-parameter
+    )
+    install(TARGETS aine-run DESTINATION bin)
 endif()
