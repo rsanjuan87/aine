@@ -99,9 +99,18 @@ static int generate_proc_self_status(void) {
     return fileno(f);
 }
 
-// AINE: interposición de open() para interceptar /proc paths
+// Forward declaration del binder open (implementado en binder-dev.c, mismo dylib)
+extern int aine_binder_shim_open(void);
+
+// AINE: interposición de open() para interceptar /proc paths y /dev/binder
 int aine_open(const char *path, int flags, ...) {
     if (path) {
+        // /dev/binder → Mach IPC via aine-binder daemon
+        if (strcmp(path, "/dev/binder") == 0 ||
+            strcmp(path, "/dev/hwbinder") == 0 ||
+            strcmp(path, "/dev/vndbinder") == 0) {
+            return aine_binder_shim_open();
+        }
         if (strcmp(path, "/proc/self/maps") == 0)
             return generate_proc_self_maps();
         if (strcmp(path, "/proc/cpuinfo") == 0)
