@@ -33,3 +33,21 @@ set_tests_properties(input-hal PROPERTIES
     PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
 )
 
+# F9: Audio HAL test (headless — GenericOutput AudioUnit, no speaker needed)
+add_executable(test-audio test_audio.c)
+target_link_libraries(test-audio PRIVATE
+    aine-audio
+    "-framework AudioToolbox"
+    "-framework CoreAudio"
+    "-framework Foundation"
+    m   # math (sin())
+)
+add_dependencies(test-audio aine-audio)
+
+add_test(NAME audio-hal COMMAND test-audio)
+set_tests_properties(audio-hal PROPERTIES
+    TIMEOUT 15
+    LABELS  "audio;f9;macos"
+    PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
+)
+
