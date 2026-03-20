@@ -4,6 +4,70 @@ Cada bloqueante está clasificado por severidad y tiene una estrategia de resolu
 
 ---
 
+## Estado actual (20 marzo 2026)
+
+| Bloqueante | Estado | Milestone |
+|------------|--------|-----------|
+| B1 — Page size 16KB | ⚠️ Workaround documentado | M1 |
+| B2 — Syscalls Linux | ✅ Implementado (aine-shim M1) | M1 |
+| B3 — /proc filesystem | ✅ Implementado (proc.c M1) | M1 |
+| B4 — pthread_setname_np | ✅ Implementado (prctl.c M1) | M1 |
+| B5 — Linux headers en macOS | ✅ Stubs creados | M0 |
+| B6 — ART standalone macOS | 🚫 Bloqueante activo M1 | M1 |
+
+---
+
+## B6 — ART standalone para macOS (CRÍTICO — ACTIVO)
+
+**Severidad:** Bloqueante total para M1
+**Origen:** ART de AOSP no tiene soporte macOS oficial
+
+### Problema
+ATL depende de `art-standalone` como paquete pkg-config (biblioteca compilada de ART).
+`art-standalone` se compila solo para Linux/Android. AINE necesita `dalvikvm` como
+binario Mach-O ARM64 para macOS.
+
+Las dependencias de ATL sobre Linux son profundas:
+- `libart_dep = dependency('art-standalone')` — solo Linux
+- `dl_bio` / `c_bio` — bibliotecas bionic (Android)
+- GTK4 / GLib / D-Bus — solo Linux
+
+### Opciones de resolución
+
+**Opción A — Compilar ART standalone desde AOSP para macOS host (recomendada)**
+```bash
+# AOSP tiene targets "host" (macOS) para herramientas como dex2oat, dalvikvm
+# Requiere: repo Android, lunch aosp_arm64-eng, m art
+# Referencia: https://source.android.com/docs/setup/build/building
+# Tiempo estimado: 2-4 semanas de setup + debugging
+```
+
+**Opción B — Usar art-standalone de un build Linux + traducción ELF (investigación)**
+- Usar Darling o similar para ejecutar el binario Linux en macOS
+- No es el objetivo final pero podría servir para un primer test
+
+**Opción C — Port incremental de ART a CMake para macOS**
+- Extraer solo los archivos de ART necesarios para `dalvikvm` + JIT
+- Compilarlos directamente con clang macOS
+- Requiere resolver deps: bionic → libSystem, Linux → XNU
+- Tiempo estimado: 4-8 semanas
+
+### Files relevantes
+- `vendor/atl/meson.build` — build system de ATL (usa Meson + pkg-config)
+- `cmake/atl-integration.cmake` — integración de ATL en AINE (actualmente no construye ART)
+- `test-apps/HelloWorld/HelloWorld.dex` — DEX listo para probar cuando tengamos dalvikvm
+
+### Test cuando esté disponible
+```bash
+./scripts/run-app.sh --test-art
+# Debe imprimir:
+# AINE: ART Runtime funcional
+# java.version: ...
+# os.arch: aarch64
+```
+
+---
+
 ## B1 — Page size 16KB (CRÍTICO)
 
 **Severidad:** Bloqueante total para AOT compilation

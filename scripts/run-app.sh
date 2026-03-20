@@ -59,25 +59,42 @@ public class HelloWorld {
 }
 JAVA_EOF
 
-  # Compilar a DEX
-  if ! command -v d8 &>/dev/null && ! command -v dx &>/dev/null; then
-    warn "d8/dx no encontrado. Usando jar precompilado de prueba."
-    # Buscar en build o vendor
-    D8=$(find "$BUILD_DIR" "$ROOT_DIR/vendor" -name "d8" 2>/dev/null | head -1)
-    [[ -z "$D8" ]] && err "d8 no encontrado. Instala el Android SDK o compila ATL primero."
+  # Usar HelloWorld.dex precompilado del repo si existe
+  PREBUILT_DEX="$ROOT_DIR/test-apps/HelloWorld/HelloWorld.dex"
+  if [[ -f "$PREBUILT_DEX" ]]; then
+    log "Usando HelloWorld.dex precompilado: $PREBUILT_DEX"
+    cp "$PREBUILT_DEX" "$TMPDIR/classes.dex"
   else
-    D8="d8"
+    # Buscar d8 en Android SDK
+    D8=""
+    if command -v d8 &>/dev/null; then
+      D8="d8"
+    else
+      # Buscar en ubicaciones comunes del Android SDK
+      for sdk_path in \
+          "$HOME/Library/Android/sdk/build-tools" \
+          "$ANDROID_HOME/build-tools" \
+          "$ANDROID_SDK_ROOT/build-tools"; do
+        D8=$(find "$sdk_path" -name "d8" 2>/dev/null | sort -V | tail -1)
+        [[ -n "$D8" ]] && break
+      done
+    fi
+    [[ -z "$D8" ]] && err "d8 no encontrado. Instala Android SDK o usa: brew install android-commandlinetools"
+
+    log "Compilando HelloWorld.java → HelloWorld.dex con $D8..."
+    javac "$TMPDIR/HelloWorld.java" -d "$TMPDIR/"
+    "$D8" --output "$TMPDIR/HelloWorld.zip" "$TMPDIR/HelloWorld.class"
+    unzip -o "$TMPDIR/HelloWorld.zip" classes.dex -d "$TMPDIR/" >/dev/null
   fi
 
-  log "Compilando HelloWorld.java → HelloWorld.dex..."
-  javac -source 8 -target 8 "$TMPDIR/HelloWorld.java" -d "$TMPDIR/" 2>/dev/null || \
-    javac "$TMPDIR/HelloWorld.java" -d "$TMPDIR/"
-  $D8 --output "$TMPDIR/" "$TMPDIR/HelloWorld.class" 2>/dev/null || \
-    warn "d8 no disponible — usando .class directamente"
-
-  # Buscar dalvikvm
+  # Buscar dalvikvm (B6: requiere ART compilado para macOS)
   DALVIKVM=$(find "$BUILD_DIR" -name "dalvikvm" 2>/dev/null | head -1)
-  [[ -z "$DALVIKVM" ]] && err "dalvikvm no compilado. Ejecuta: ./scripts/build.sh primero."
+  if [[ -z "$DALVIKVM" ]]; then
+    warn "dalvikvm no encontrado — BLOQUEANTE B6: necesita ART standalone para macOS"
+    warn "Ver: docs/blockers.md#b6-art-standalone-macos"
+    warn "HelloWorld.dex está listo en $TMPDIR/classes.dex — esperando dalvikvm"
+    err "dalvikvm no disponible. Compila ART para macOS ARM64 primero."
+  fi
 
   log "Ejecutando con ART (modo JIT — workaround page size 16KB activo)..."
   DYLD_INSERT_LIBRARIES="$BUILD_DIR/src/aine-shim/libaine-shim.dylib" \
