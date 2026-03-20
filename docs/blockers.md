@@ -13,26 +13,38 @@ Cada bloqueante está clasificado por severidad y tiene una estrategia de resolu
 | B3 — /proc filesystem | ✅ Implementado (proc.c M1) | M1 |
 | B4 — pthread_setname_np | ✅ Implementado (prctl.c M1) | M1 |
 | B5 — Linux headers en macOS | ✅ Stubs creados | M0 |
-| B6 — ART standalone macOS | 🚫 Bloqueante activo M1 | M1 |
+| B6 — ART standalone macOS | ⚠️ Workaround: adb bridge. Nativo pendiente | M1 |
 
 ---
 
-## B6 — ART standalone para macOS (CRÍTICO — ACTIVO)
+## B6 — ART standalone para macOS (workaround activo, nativo pendiente)
 
-**Severidad:** Bloqueante total para M1
+**Severidad:** Workaround funcional via adb bridge; dalvikvm Mach-O nativo pendiente
 **Origen:** ART de AOSP no tiene soporte macOS oficial
 
-### Problema
+### Estado: WORKAROUND FUNCIONAL ✅
+
+`./scripts/run-app.sh --test-art` ejecuta `HelloWorld.dex` con ART real ARM64 via bridge adb.
+Salida verificada:
+```
+AINE: ART Runtime funcional
+java.version: 0
+os.arch: aarch64
+```
+
+**Flujo workaround:**
+1. `run-app.sh` busca `dalvikvm` nativo en `build/` → no encontrado
+2. Fallback: usa `adb` para conectar a emulador ARM64 (AVD `android`)
+3. Push del DEX a `/data/local/tmp/HelloWorld.dex`  
+4. `adb shell dalvikvm -cp /data/local/tmp/HelloWorld.dex HelloWorld`
+5. Output piped a stdout de macOS
+
+### Problema pendiente — dalvikvm Mach-O nativo
 ATL depende de `art-standalone` como paquete pkg-config (biblioteca compilada de ART).
 `art-standalone` se compila solo para Linux/Android. AINE necesita `dalvikvm` como
-binario Mach-O ARM64 para macOS.
+binario Mach-O ARM64 para macOS para que aine-shim sea la capa de integración real.
 
-Las dependencias de ATL sobre Linux son profundas:
-- `libart_dep = dependency('art-standalone')` — solo Linux
-- `dl_bio` / `c_bio` — bibliotecas bionic (Android)
-- GTK4 / GLib / D-Bus — solo Linux
-
-### Opciones de resolución
+### Opciones de resolución (dalvikvm nativo)
 
 **Opción A — Compilar ART standalone desde AOSP para macOS host (recomendada)**
 ```bash
@@ -42,22 +54,19 @@ Las dependencias de ATL sobre Linux son profundas:
 # Tiempo estimado: 2-4 semanas de setup + debugging
 ```
 
-**Opción B — Usar art-standalone de un build Linux + traducción ELF (investigación)**
-- Usar Darling o similar para ejecutar el binario Linux en macOS
-- No es el objetivo final pero podría servir para un primer test
-
-**Opción C — Port incremental de ART a CMake para macOS**
-- Extraer solo los archivos de ART necesarios para `dalvikvm` + JIT
-- Compilarlos directamente con clang macOS
+**Opción B — Port incremental de ART a CMake para macOS**
+- Extraer solo los archivos de ART necesarios para `dalvikvm` + intérprete (sin JIT)
+- Compilarlos directamente con clang macOS, usando aine-shim para syscalls Linux
 - Requiere resolver deps: bionic → libSystem, Linux → XNU
 - Tiempo estimado: 4-8 semanas
 
 ### Files relevantes
 - `vendor/atl/meson.build` — build system de ATL (usa Meson + pkg-config)
 - `cmake/atl-integration.cmake` — integración de ATL en AINE (actualmente no construye ART)
-- `test-apps/HelloWorld/HelloWorld.dex` — DEX listo para probar cuando tengamos dalvikvm
+- `test-apps/HelloWorld/HelloWorld.dex` — DEX listo, funcional via adb bridge
+- `scripts/run-app.sh` — `cmd_test_art()`, detecta nativo o cae a adb bridge
 
-### Test cuando esté disponible
+### Test
 ```bash
 ./scripts/run-app.sh --test-art
 # Debe imprimir:

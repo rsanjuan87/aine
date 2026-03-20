@@ -87,25 +87,62 @@ JAVA_EOF
     unzip -o "$TMPDIR/HelloWorld.zip" classes.dex -d "$TMPDIR/" >/dev/null
   fi
 
-  # Buscar dalvikvm (B6: requiere ART compilado para macOS)
+  # Buscar dalvikvm nativo (M1 completo: ART compilado como Mach-O para macOS)
   DALVIKVM=$(find "$BUILD_DIR" -name "dalvikvm" 2>/dev/null | head -1)
-  if [[ -z "$DALVIKVM" ]]; then
-    warn "dalvikvm no encontrado — BLOQUEANTE B6: necesita ART standalone para macOS"
-    warn "Ver: docs/blockers.md#b6-art-standalone-macos"
-    warn "HelloWorld.dex está listo en $TMPDIR/classes.dex — esperando dalvikvm"
-    err "dalvikvm no disponible. Compila ART para macOS ARM64 primero."
+  if [[ -n "$DALVIKVM" ]]; then
+    log "Ejecutando con ART nativo (Mach-O dalvikvm)..."
+    DYLD_INSERT_LIBRARIES="$BUILD_DIR/src/aine-shim/libaine-shim.dylib" \
+    AINE_LOG_LEVEL="${AINE_LOG_LEVEL:-info}" \
+    "$DALVIKVM" \
+      -Xnoimage-dex2oat \
+      -Xusejit:false \
+      -cp "$TMPDIR/classes.dex" \
+      HelloWorld
+    ok "Test ART completado (dalvikvm nativo)"
+    rm -rf "$TMPDIR"
+    return
   fi
 
-  log "Ejecutando con ART (modo JIT — workaround page size 16KB activo)..."
-  DYLD_INSERT_LIBRARIES="$BUILD_DIR/src/aine-shim/libaine-shim.dylib" \
-  AINE_LOG_LEVEL="${AINE_LOG_LEVEL:-info}" \
-  "$DALVIKVM" \
-    -Xnoimage-dex2oat \
-    -Xusejit:false \
-    -cp "$TMPDIR/classes.dex" \
-    HelloWorld
+  # Fallback: adb bridge — usa dalvikvm dentro del emulador/dispositivo ARM64
+  # B6 workaround: arm64-v8a ART via adb shell hasta que tengamos Mach-O dalvikvm
+  warn "dalvikvm nativo no disponible (B6 pendiente). Usando bridge adb..."
+  ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
+  if [[ ! -x "$ADB" ]]; then
+    err "adb no encontrado. Instala Android SDK. Ver docs/blockers.md#b6"
+  fi
 
-  ok "Test ART completado"
+  # Arrancar servidor adb si no está activo
+  "$ADB" start-server &>/dev/null
+
+  # Encontrar emulador ARM64 disponible
+  SERIAL=$("$ADB" devices | awk '/device$/ {print $1}' | head -1)
+  if [[ -z "$SERIAL" ]]; then
+    log "No hay dispositivo/emulador conectado. Arrancando AVD..."
+    EMULATOR="${ANDROID_HOME:-$HOME/Library/Android/sdk}/emulator/emulator"
+    AVD=$("$EMULATOR" -list-avds 2>/dev/null | head -1)
+    [[ -z "$AVD" ]] && err "No hay AVDs disponibles. Crea uno en Android Studio."
+    "$EMULATOR" -avd "$AVD" -no-window -no-audio -no-snapshot-save &>/dev/null &
+    log "Esperando boot del emulador ($AVD)..."
+    for i in {1..30}; do
+      SERIAL=$("$ADB" devices | awk '/emulator.*device$/ {print $1}' | head -1)
+      [[ -n "$SERIAL" ]] && break
+      sleep 5
+    done
+    [[ -z "$SERIAL" ]] && err "Emulador no arrancó a tiempo."
+    for i in {1..24}; do
+      boot=$("$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+      [[ "$boot" == "1" ]] && break
+      sleep 5
+    done
+  fi
+
+  DEX_REMOTE="/data/local/tmp/HelloWorld.dex"
+  log "Usando dispositivo: $SERIAL"
+  "$ADB" -s "$SERIAL" push "$TMPDIR/classes.dex" "$DEX_REMOTE" &>/dev/null
+  log "Ejecutando HelloWorld.dex via dalvikvm (arm64-v8a ART, bridge adb)..."
+  "$ADB" -s "$SERIAL" shell dalvikvm -cp "$DEX_REMOTE" HelloWorld
+
+  ok "Test ART completado (via adb bridge — B6 workaround)"
   rm -rf "$TMPDIR"
 }
 
