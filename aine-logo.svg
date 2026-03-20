@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg" xmlns:bx="https://boxy-svg.com">
+  <defs>
+    <radialGradient id="wg" cx="28%" cy="28%" r="60%" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D4D4D4"/>
+    </radialGradient>
+    <bx:grid x="0" y="0" width="1.686" height="1.495"/>
+    <linearGradient gradientUnits="userSpaceOnUse" x1="4.044" y1="-143.91" x2="4.044" y2="-0.101" id="gradient-0" gradientTransform="matrix(0.761785, -0.651345, 0.741681, 0.884254, 118.764984, 53.830879)">
+      <stop offset="0" style="stop-color: rgb(0% 92.157% 31.373%)"/>
+      <stop offset="1" style="stop-color: rgb(0% 53.671% 11.982%)"/>
+    </linearGradient>
+  </defs>
+  <g transform="matrix(-0.897129, 0.449964, 0.447535, 0.892288, 199.828247, 215.345718)" style="transform-origin: 0px -12.75px;">
+    <path d="M 54,0 L 54,66 A 54,54 0 0,1 -54,66 L -54,0 Z" fill="url(#wg)" style="stroke: rgb(0, 0, 0); stroke-width: 6.99343px;"/>
+    <ellipse cx="-17" cy="32" rx="10" ry="27" fill="white" opacity="0.55" transform="rotate(-4)"/>
+    <ellipse cx="-28" cy="20" rx="4" ry="12" fill="white" opacity="0.3" transform="rotate(-4)"/>
+    <path d="M -54 0 L -54 -66 C -54 -83.637 -45.9 -98.468 -33.823 -108.112 C -32.399 -109.249 -41.701 -124.234 -44.083 -132.826 C -44.905 -135.79 -43.751 -139.695 -42.25 -140.452 C -39.247 -141.967 -35.617 -140.346 -33.572 -138.126 C -27.607 -131.648 -21.51 -115.593 -19.321 -116.439 C -7.868 -120.865 5.151 -121.472 17.669 -117.068 C 18.267 -116.857 24.832 -134.069 29.502 -139.775 C 30.919 -141.506 32.671 -144.724 37.01 -143.561 C 41.349 -142.398 41.318 -137.841 41.017 -135.529 C 39.851 -126.564 31.339 -109.985 32.035 -109.472 C 45.751 -99.368 54 -83.272 54 -66 L 54 0 L -54 0 Z" style="stroke: rgb(0, 0, 0); stroke-width: 6.99343px; fill: url('#gradient-0');"/>
+    <g transform="matrix(1, 0, 0, 1, -4.645211, -4.993223)">
+      <ellipse cx="-17" cy="32" rx="10.003" ry="26.991" opacity="0.55" transform="matrix(0.964538, 0.263945, -0.260577, 0.965459, -12.331241, -104.160132)" style="transform-box: fill-box; transform-origin: 50% 50%; fill: rgba(255, 255, 255, 0.424);"/>
+      <ellipse cx="-28" cy="20" rx="4.004" ry="11.682" opacity="0.3" transform="matrix(0.895626, 0.444807, -0.440286, 0.897872, -2.287225, -106.896609)" style="transform-box: fill-box; transform-origin: 50% 50%; fill: rgba(255, 255, 255, 0.576);"/>
+    </g>
+    <g transform="matrix(0.57365, 0, 0, 0.57365, 16.272987, -53.474129)" style="">
+      <circle cx="-59.249" cy="-37.25" r="10.5" style="stroke-width: 6.96635px;"/>
+      <circle cx="-1.987" cy="-38.444" r="10.5" style="stroke-width: 6.96635px;"/>
+    </g>
+  </g>
+</svg>

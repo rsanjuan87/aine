@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AINE — Aine Is No Emulator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green:   #3DDC84;
+    --green-l: #6EFFC0;
+    --navy:    #1B2845;
+    --bg:      #0C1420;
+    --bg2:     #111C2E;
+    --bg3:     #162235;
+    --text:    #E8F0FF;
+    --muted:   #7A90B4;
+    --border:  rgba(61,220,132,0.15);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  /* === HERO === */
+  .hero {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 64px 24px 48px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(61,220,132,0.08) 0%, transparent 70%);
+    top: -100px; left: 50%; transform: translateX(-50%);
+    pointer-events: none;
+  }
+
+  /* === LOGO === */
+  .logo-wrap {
+    position: relative;
+    width: 200px; height: 200px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 32px;
+    filter: drop-shadow(0 8px 32px rgba(61,220,132,0.25));
+    animation: float 4s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%,100% { transform: translateY(0); }
+    50%      { transform: translateY(-8px); }
+  }
+
+  .logo-wrap svg { width: 200px; height: 200px; }
+
+  /* === WORDMARK === */
+  .wordmark {
+    font-family: 'Space Mono', monospace;
+    font-size: 72px;
+    font-weight: 700;
+    letter-spacing: -2px;
+    line-height: 1;
+    margin-bottom: 6px;
+    background: #3DDC84;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .fullname {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 28px;
+  }
+
+  .fullname span { color: var(--green); }
+
+  /* === MAIN TAGLINE === */
+  .tagline {
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text);
+    text-align: center;
+    max-width: 540px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+  }
+  .tagline strong { font-weight: 600; color: var(--green); }
+
+  .sub-tagline {
+    font-size: 14px;
+    color: var(--muted);
+    text-align: center;
+    max-width: 440px;
+    line-height: 1.6;
+    margin-bottom: 48px;
+  }
+
+  /* === NSAID SECTION === */
+  .pill-card {
+    width: 100%;
+    max-width: 700px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 40px 44px;
+    margin: 0 24px 48px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pill-card::before {
+    content: 'NSAID';
+    position: absolute;
+    right: -8px; top: 16px;
+    font-family: 'Space Mono', monospace;
+    font-size: 88px;
+    font-weight: 700;
+    color: rgba(61,220,132,0.04);
+    pointer-events: none;
+    letter-spacing: -4px;
+  }
+
+  .pill-card-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(61,220,132,0.12);
+    border: 1px solid rgba(61,220,132,0.3);
+    border-radius: 100px;
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .pill-card-badge::before {
+    content: '';
+    width: 7px; height: 7px;
+    background: var(--green);
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.5; transform: scale(1.4); }
+  }
+
+  .pill-card h2 {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    line-height: 1.3;
+  }
+
+  .pill-card h2 em {
+    font-style: normal;
+    color: var(--green);
+  }
+
+  .pill-card p {
+    font-size: 15px;
+    color: #9AAEC8;
+    line-height: 1.75;
+    font-weight: 300;
+  }
+
+  .pill-card p strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* === COMPARISON TABLE === */
+  .compare {
+    width: 100%;
+    max-width: 700px;
+    padding: 0 24px;
+    margin-bottom: 48px;
+  }
+
+  .compare h3 {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 2.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+
+  .comp-item {
+    background: var(--bg3);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 20px 18px;
+  }
+
+  .comp-item.active {
+    background: rgba(61,220,132,0.07);
+    border-color: rgba(61,220,132,0.25);
+  }
+
+  .comp-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    color: var(--muted);
+  }
+
+  .comp-item.active .comp-label { color: var(--green); }
+
+  .comp-name {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 6px;
+    color: var(--text);
+  }
+
+  .comp-desc {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .comp-item.active .comp-desc { color: #9AAEC8; }
+
+  /* === BADGES ROW === */
+  .badges {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 56px;
+  }
+
+  .badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 6px 14px;
+    border-radius: 100px;
+    border: 1px solid rgba(255,255,255,0.08);
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+
+  .badge.green {
+    border-color: rgba(61,220,132,0.3);
+    color: var(--green);
+    background: rgba(61,220,132,0.06);
+  }
+
+  /* === FOOTER === */
+  footer {
+    width: 100%;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding: 24px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    letter-spacing: 0.5px;
+  }
+
+  footer span { color: var(--green); }
+</style>
+</head>
+<body>
+
+<div class="hero">
+
+  <!-- LOGO SVG desde archivo-->
+  <div class="logo-wrap">
+
+    <img src="aine-logo.svg" viewBox="0 0 420 420"  ></svg>
+  </div>
+
+  <!-- WORDMARK -->
+  <div class="wordmark">AINE</div>
+  <div class="fullname">
+    <span>A</span>ine <span>I</span>s <span>N</span>o <span>E</span>mulator
+  </div>
+
+  <!-- TAGLINE -->
+  <p class="tagline">
+    El <strong>antiinflamatorio</strong> de Android para macOS.<br/>
+    Traduce sin emular. Corre sin inflamar.
+  </p>
+  <p class="sub-tagline">
+    Apps Android AOSP como procesos macOS nativos en Apple Silicon —
+    sin VM, sin contenedor, sin emulación de CPU.
+  </p>
+
+</div>
+
+<!-- NSAID CARD -->
+<div class="pill-card">
+  <div class="pill-card-badge">Doble significado</div>
+  <h2>
+    <em>A</em>nti <em>I</em>nflamatorio <em>N</em>o <em>E</em>steroide<br/>
+    para el ecosistema Android
+  </h2>
+  <p>
+    Los antiinflamatorios no esteroideos (AINEs) actúan directamente en el origen del dolor
+    sin ser soluciones invasivas. No son esteroides — no transforman el sistema,
+    solo reducen la fricción donde se necesita.
+  </p>
+  <br/>
+  <p>
+    AINE funciona igual. <strong>No es un emulador</strong> — no traduce instrucciones de CPU.
+    <strong>No es un contenedor completo</strong> — no arrastra un kernel Linux.
+    Es una capa de traducción de APIs: los syscalls Linux se mapean a XNU,
+    el Binder corre sobre Mach IPC, OpenGL ES se convierte en Metal.
+    <strong>El código de la app corre directamente en Apple Silicon,</strong>
+    como si siempre hubiera sido una app macOS.
+  </p>
+</div>
+
+<!-- COMPARISON -->
+<div class="compare">
+  <h3>Cómo se compara AINE</h3>
+  <div class="compare-grid">
+
+    <div class="comp-item">
+      <div class="comp-label">Emulador</div>
+      <div class="comp-name">BlueStacks / QEMU</div>
+      <div class="comp-desc">
+        Emula hardware ARM completo. CPU virtual, GPU virtual.
+        Lento. Alto consumo. La app nunca toca el metal real.
+      </div>
+    </div>
+
+    <div class="comp-item">
+      <div class="comp-label">Contenedor</div>
+      <div class="comp-name">Waydroid</div>
+      <div class="comp-desc">
+        Android completo en LXC + kernel Linux real.
+        Solo funciona en Linux. No disponible en macOS.
+      </div>
+    </div>
+
+    <div class="comp-item active">
+      <div class="comp-label">AINE ✦</div>
+      <div class="comp-name">Traducción de API</div>
+      <div class="comp-desc">
+        El código corre nativo en ARM64.
+        Solo se traducen las llamadas. Sin overhead de VM.
+        Como Wine, pero para Android en macOS.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- TECH BADGES -->
+<div class="badges">
+  <span class="badge green">GPL v3</span>
+  <span class="badge green">Apple Silicon ARM64</span>
+  <span class="badge green">Basado en ATL</span>
+  <span class="badge">OpenGL ES → Metal</span>
+  <span class="badge">Binder → Mach IPC</span>
+  <span class="badge">Linux syscalls → XNU</span>
+  <span class="badge">AOSP · FOSS</span>
+  <span class="badge">macOS 13+</span>
+</div>
+
+<footer>
+  AINE &nbsp;·&nbsp; <span>Aine Is No Emulator</span>
+  &nbsp;·&nbsp; Antiinflamatorio No Esteroide para Android en macOS
+</footer>
+
+</body>
+</html>
