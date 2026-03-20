@@ -70,3 +70,24 @@ set_tests_properties(activity-lifecycle PROPERTIES
     PASS_REGULAR_EXPRESSION "onDestroy"
 )
 
+# F12: HAL integration tests (Vulkan/MoltenVK detect + Camera + Clipboard)
+add_executable(test-f12-hals test_f12_hals.c)
+target_include_directories(test-f12-hals PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/aine-hals/vulkan"
+    "${CMAKE_SOURCE_DIR}/src/aine-hals/camera"
+    "${CMAKE_SOURCE_DIR}/src/aine-hals/clipboard"
+)
+target_link_libraries(test-f12-hals PRIVATE
+    aine-vulkan
+    aine-camera
+    aine-clipboard
+)
+add_dependencies(test-f12-hals aine-vulkan aine-camera aine-clipboard)
+
+add_test(NAME hals-f12 COMMAND test-f12-hals)
+set_tests_properties(hals-f12 PROPERTIES
+    TIMEOUT 15
+    LABELS  "vulkan;camera;clipboard;f12;macos"
+    PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
+)
+

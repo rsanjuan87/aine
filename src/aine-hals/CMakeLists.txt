@@ -13,6 +13,7 @@ add_subdirectory(libandroid)
 # F7: Graphics — EGL (Metal-backed) + GLES2 stubs + surface manager + SF + VSYNC
 # F8: Input — NSEvent → Android KeyEvent / MotionEvent
 # F9: Audio — CoreAudio AudioUnit → AudioTrack
+# F12: Vulkan HAL (MoltenVK detection) + Camera (AVCaptureSession) + Clipboard (NSPasteboard)
 if(AINE_PLATFORM_MACOS)
     add_subdirectory(libegl)
     add_subdirectory(libgles2)
@@ -21,4 +22,7 @@ if(AINE_PLATFORM_MACOS)
     add_subdirectory(vsync)
     add_subdirectory(input)
     add_subdirectory(audio)
+    add_subdirectory(vulkan)
+    add_subdirectory(camera)
+    add_subdirectory(clipboard)
 endif()
