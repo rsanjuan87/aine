@@ -91,7 +91,7 @@ extern "C" {
 
 // Listar servicio en posición `index` (0-based). Escribe nombre en `out`.
 // Devuelve 0 si hay servicio, -1 si no.
-int aine_svc_list(int binder_fd, int index, char *out, size_t out_size) {
+AINE_PUBLIC int aine_svc_list(int binder_fd, int index, char *out, size_t out_size) {
     Parcel req;
     parcel_init(&req);
     parcel_write_interface_token(&req, SVC_MGR_INTERFACE);
@@ -127,7 +127,7 @@ int aine_svc_list(int binder_fd, int index, char *out, size_t out_size) {
 }
 
 // Obtener handle de un servicio por nombre. Devuelve 0 si encontrado.
-int aine_svc_get(int binder_fd, const char *name, uint32_t *handle_out) {
+AINE_PUBLIC int aine_svc_get(int binder_fd, const char *name, uint32_t *handle_out) {
     Parcel req;
     parcel_init(&req);
     parcel_write_interface_token(&req, SVC_MGR_INTERFACE);
@@ -156,7 +156,7 @@ int aine_svc_get(int binder_fd, const char *name, uint32_t *handle_out) {
 }
 
 // Registrar un servicio en el daemon
-int aine_svc_add(int binder_fd, const char *name) {
+AINE_PUBLIC int aine_svc_add(int binder_fd, const char *name) {
     Parcel req;
     parcel_init(&req);
     parcel_write_interface_token(&req, SVC_MGR_INTERFACE);

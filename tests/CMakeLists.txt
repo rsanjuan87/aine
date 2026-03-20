@@ -2,6 +2,7 @@
 
 add_subdirectory(shared)
 add_subdirectory(shim)
+add_subdirectory(binder)
 
 if(AINE_PLATFORM_MACOS)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/macos")

@@ -155,6 +155,14 @@ AINE_PUBLIC int  aine_binder_daemon_start(void);
 AINE_PUBLIC int  aine_binder_daemon_run(void);     // bloquea hasta señal
 AINE_PUBLIC int  aine_binder_daemon_is_running(void);
 
+// =============================================================================
+// Service Manager: listado / consulta / registro de servicios
+// =============================================================================
+
+AINE_PUBLIC int  aine_svc_list(int binder_fd, int index, char *out, size_t out_size);
+AINE_PUBLIC int  aine_svc_get(int binder_fd, const char *name, uint32_t *handle_out);
+AINE_PUBLIC int  aine_svc_add(int binder_fd, const char *name);
+
 #ifdef __cplusplus
 }
 #endif
