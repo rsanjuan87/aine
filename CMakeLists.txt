@@ -36,6 +36,8 @@ add_subdirectory(src/aine-hals)
 add_subdirectory(src/aine-launcher)
 add_subdirectory(src/aine-dalvik)
 add_subdirectory(src/aine-pm)
+add_subdirectory(src/aine-loader)
+add_subdirectory(test-apps/native-stub)
 
 enable_testing()
 add_subdirectory(tests)

@@ -235,33 +235,40 @@ ctest --test-dir build -R pm --output-on-failure
 
 ---
 
-## FASE 5 — Loader de libs nativas (.so ARM64) ⬜
+## FASE 5 — Loader de libs nativas (.so ARM64) ✅
 
 **Objetivo:** Las libs `.so` ARM64 del APK se cargan directamente via `dlopen` macOS,
 usando path mapping Android→macOS y resolviendo símbolos de `libandroid.so`.
 
-### T5.1 — Path mapping Android → macOS ⬜
-- ⬜ `src/aine-loader/path_map.h` / `path_map.c`
-  - ⬜ `/system/lib64/liblog.so` → `libaine-log.dylib`
-  - ⬜ `/system/lib64/libandroid.so` → `libaine-android.dylib`
-  - ⬜ `/system/lib64/libEGL.so` → ANGLE `libEGL.dylib`
-  - ⬜ `/system/lib64/libGLESv2.so` → ANGLE `libGLESv2.dylib`
-  - ⬜ `/system/lib64/libc.so` → `libSystem.dylib` (macOS libc)
+### T5.1 — Path mapping Android → macOS ✅
+- ✅ `src/aine-loader/path_map.h` / `path_map.c`
+  - ✅ `/system/lib64/liblog.so` → `libaine-log.dylib`
+  - ✅ `/system/lib64/libandroid.so` → `libaine-android.dylib`
+  - ✅ `/system/lib64/libEGL.so` → `libaine-egl.dylib` (placeholder)
+  - ✅ `/system/lib64/libGLESv2.so` → `libaine-gles2.dylib` (placeholder)
+  - ✅ `/system/lib64/libc.so` → `/usr/lib/libSystem.B.dylib`
+  - ✅ `AINE_LIB_DIR` env var for runtime dylib discovery
 
-### T5.2 — Stub liblog (android/log.h) ⬜
-- ⬜ `src/aine-hals/liblog/log.c`
-  - ⬜ `__android_log_print(priority, tag, fmt, ...)` → `fprintf(stderr, ...)`
-  - ⬜ `__android_log_write` / `__android_log_vprint`
+### T5.2 — Stub liblog (android/log.h) ✅
+- ✅ `src/aine-hals/liblog/log.c` → `libaine-log.dylib`
+  - ✅ `__android_log_print(priority, tag, fmt, ...)` → `fprintf(stderr, ...)`
+  - ✅ `__android_log_write` / `__android_log_vprint` / `__android_log_assert`
+  - ✅ `__android_log_buf_write` / `__android_log_buf_print`
 
-### T5.3 — Stub libandroid (ANativeActivity, AAssetManager) ⬜
-- ⬜ `src/aine-hals/libandroid/`
-  - ⬜ `ANativeActivity_onCreate` — registra callbacks de ciclo de vida
-  - ⬜ `AAssetManager_open` — abre assets extraídos del APK
-  - ⬜ `ALooper_prepare` / `ALooper_pollAll` — event loop nativo
+### T5.3 — Stub libandroid (ANativeActivity, AAssetManager, ALooper) ✅
+- ✅ `src/aine-hals/libandroid/` → `libaine-android.dylib`
+  - ✅ `ANativeActivity_onCreate` (weak symbol stub)
+  - ✅ `AAssetManager_open/close/read/seek/getLength` (reads from `/tmp/aine/<pkg>/assets/`)
+  - ✅ `ALooper_prepare` / `ALooper_pollAll` / `ALooper_addFd` stubs
 
-### T5.4 — Test de carga de .so ⬜
-- ⬜ Compilar una lib ARM64 de prueba con símbolo `aine_native_test()`
-- ⬜ Verificar que `dlopen` vía path mapping la carga y el símbolo resuelve
+### T5.4 — Test de carga de .so ✅
+- ✅ `test-apps/native-stub/native_stub.c` → `libaine-native-stub.dylib`
+  - ✅ `aine_native_test()` returns 42, `JNI_OnLoad()` returns JNI_VERSION_1_6
+- ✅ `tests/loader/test_loader.c` — CTest `loader-path-map` (8/8 total)
+  - ✅ T1: path_map_resolve static table
+  - ✅ T2: aine_dlopen liblog + `__android_log_print` resolves
+  - ✅ T3: dlopen native-stub + `aine_native_test()` == 42
+  - ✅ T4: libz.so maps to /usr/lib/libz.dylib (loadable)
 
 **Cómo verificar F5:**
 ```bash
@@ -548,7 +555,7 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F2 | aine-shim (syscalls Linux→macOS) | ✅ |
 | F3 | aine-binder (Binder IPC) | ✅ |
 | F4 | PackageManager mínimo (APK parser) | ✅ |
-| F5 | Loader de libs nativas (.so ARM64) | ⬜ |
+| F5 | Loader de libs nativas (.so ARM64) | ✅ |
 | F6 | ART completo (ClassLoader + reflection) | ⬜ |
 | F7 | Gráficos: ANGLE + Metal | ⬜ |
 | F8 | Input: teclado y ratón | ⬜ |
@@ -557,8 +564,8 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F11 | Primera app visual real | ⬜ |
 | F12 | Optimización + beta pública | ⬜ |
 
-**Próximo paso: F5 — Loader de libs nativas (.so ARM64)**
+**Próximo paso: F6 — ART completo (ClassLoader + reflection)**
 
 ---
 
-*Actualizado: 20 marzo 2026 — F0→F4 completadas, F5 es el siguiente paso*
+*Actualizado: 20 marzo 2026 — F0→F5 completadas, F6 es el siguiente paso*
