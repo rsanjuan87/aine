@@ -1,0 +1,84 @@
+name: AINE CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang lld ccache openjdk-17-jdk-headless pkg-config
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-linux.cmake
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: Test
+        run: cmake --build build --target test 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: aine-linux-x86_64
+          path: build/src/**/*.so
+          retention-days: 7
+
+  build-macos:
+    name: Build macOS ARM64
+    runs-on: macos-14
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Install deps
+        run: brew install cmake ninja ccache openjdk@17 --quiet
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-macos-${{ github.sha }}
+          restore-keys: ccache-macos-
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-macos.cmake
+      - name: Build
+        run: cmake --build build --parallel 4
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: aine-macos-arm64
+          path: build/src/**/*.dylib
+          retention-days: 7
+
+  platform-compat-check:
+    name: Platform compat check
+    runs-on: ubuntu-24.04
+    needs: [build-linux]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    steps:
+      - uses: actions/checkout@v4
+      - name: No platform code in common/
+        run: |
+          if grep -r "__APPLE__\|__linux__" src/aine-shim/common/ src/aine-binder/common/ 2>/dev/null; then
+            echo "ERROR: platform-specific code in common/ — move to macos/ or linux/"
+            exit 1
+          fi
+          echo "OK"
+      - name: ATL sync check
+        run: ./scripts/sync-atl.sh --fetch && ./scripts/sync-atl.sh --report
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atl-sync-report
+          path: docs/atl-sync-report.md

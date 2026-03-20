@@ -1,0 +1,49 @@
+# Build
+build/
+*.o
+*.a
+*.dylib
+*.so
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# macOS
+.DS_Store
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# AINE runtime data
+~/Library/AINE/
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# Temp
+/tmp/atl-*.patch
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# ATL upstream (solo lectura, se maneja como submódulo)
+# vendor/atl/ — NO ignorar, es un submódulo
+
+# ccache
+.ccache/

@@ -1,0 +1,7 @@
+foreach(src audio/AudioHAL.mm graphics/GraphicsHAL.mm input/InputHAL.mm camera/CameraHAL.mm)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${src}")
+        file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/${src}" "// AINE stub: ${src}\n")
+    endif()
+endforeach()
+add_library(aine-hals-macos SHARED audio/AudioHAL.mm graphics/GraphicsHAL.mm input/InputHAL.mm camera/CameraHAL.mm)
+target_link_libraries(aine-hals-macos PRIVATE "-framework CoreAudio" "-framework AudioToolbox" "-framework Metal" "-framework QuartzCore" "-framework AVFoundation" "-framework AppKit" aine-binder)

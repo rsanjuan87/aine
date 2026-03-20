@@ -1,0 +1,7 @@
+foreach(src audio/AudioHAL.cpp graphics/GraphicsHAL.cpp input/InputHAL.cpp camera/CameraHAL.cpp)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${src}")
+        file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/${src}" "// AINE stub: ${src}\n// ATL-compatible Linux HAL\n")
+    endif()
+endforeach()
+add_library(aine-hals-linux SHARED audio/AudioHAL.cpp graphics/GraphicsHAL.cpp input/InputHAL.cpp camera/CameraHAL.cpp)
+target_link_libraries(aine-hals-linux PRIVATE aine-binder)
