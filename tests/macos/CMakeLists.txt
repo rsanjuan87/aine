@@ -58,3 +58,15 @@ set_tests_properties(launcher-run PROPERTIES
     LABELS  "launcher;f10;macos"
 )
 
+# F11: Activity lifecycle smoke test — aine-run launches M3TestApp via dalvikvm
+# AINE_DALVIKVM points to the built dalvikvm binary so posix_spawn finds it.
+add_test(NAME activity-lifecycle
+    COMMAND aine-run "${CMAKE_SOURCE_DIR}/test-apps/M3TestApp/M3TestApp.apk"
+)
+set_tests_properties(activity-lifecycle PROPERTIES
+    TIMEOUT 30
+    LABELS  "activity;f11;macos"
+    ENVIRONMENT "AINE_DALVIKVM=${CMAKE_BINARY_DIR}/dalvikvm"
+    PASS_REGULAR_EXPRESSION "onDestroy"
+)
+

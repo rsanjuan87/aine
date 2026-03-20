@@ -36,6 +36,13 @@ static char g_dalvikvm_path[1024] = "dalvikvm";
 
 static void find_dalvikvm(const char *argv0)
 {
+    /* Honour explicit override */
+    const char *env = getenv("AINE_DALVIKVM");
+    if (env && env[0] && access(env, X_OK) == 0) {
+        strncpy(g_dalvikvm_path, env, sizeof(g_dalvikvm_path) - 1);
+        return;
+    }
+
     const char *slash = strrchr(argv0, '/');
     if (slash) {
         size_t dir_len = (size_t)(slash - argv0);

@@ -766,8 +766,28 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor) {
     int method_idx = dex_find_method(interp->df, cdef_idx,
                                      "main", "([Ljava/lang/String;)V");
     if (method_idx < 0) {
-        fprintf(stderr, "[aine-dalvik] main() not found in %s\n", class_descriptor);
-        return 1;
+        /* No main() — try Activity lifecycle mode (onCreate → … → onDestroy) */
+        fprintf(stderr, "[aine-dalvik] Activity mode: %s\n", class_descriptor);
+
+        static AineObj s_this  = { .type = OBJ_NULL };
+        static AineObj s_null  = { .type = OBJ_NULL };
+        Reg this_reg;    reg_set_obj(&this_reg, &s_this);
+        Reg null_reg;    reg_set_obj(&null_reg, &s_null);
+        Reg two_regs[2]; two_regs[0] = this_reg; two_regs[1] = null_reg;
+
+        /* <init>()V */
+        exec_method(interp, class_descriptor, "<init>", &this_reg, 1, 0, NULL);
+        /* onCreate(Bundle)V — pass null bundle */
+        exec_method(interp, class_descriptor, "onCreate", two_regs, 2, 0, NULL);
+        /* onStart()V */
+        exec_method(interp, class_descriptor, "onStart", &this_reg, 1, 0, NULL);
+        /* onResume()V */
+        exec_method(interp, class_descriptor, "onResume", &this_reg, 1, 0, NULL);
+        /* Lifecycle teardown */
+        exec_method(interp, class_descriptor, "onPause",   &this_reg, 1, 0, NULL);
+        exec_method(interp, class_descriptor, "onStop",    &this_reg, 1, 0, NULL);
+        exec_method(interp, class_descriptor, "onDestroy", &this_reg, 1, 0, NULL);
+        return 0;
     }
 
     const DexCodeItem *ci = dex_code_item(interp->df, cdef_idx, method_idx);

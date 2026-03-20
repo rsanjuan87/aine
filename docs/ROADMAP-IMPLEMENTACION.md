@@ -561,11 +561,11 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F8 | Input: teclado y ratón (NSEvent→KeyEvent/MotionEvent) | ✅ |
 | F9 | Audio: CoreAudio HAL (AudioUnit + AudioTrack) | ✅ |
 | F10 | aine-run: lanzador AINE-nativo de APKs | ✅ |
-| F11 | Primera app visual real | ⬜ |
+| F11 | Primera app visual real | ✅ |
 | F12 | Optimización + beta pública | ⬜ |
 
-**Próximo paso: F11 — Primera app visual real**
+**Próximo paso: F12 — Optimización + beta pública**
 
 ---
 
-*Actualizado: 20 marzo 2026 — F0→F10 completadas, F11 es el siguiente paso*
+*Actualizado: 20 marzo 2026 — F0→F11 completadas, F12 es el siguiente paso*
