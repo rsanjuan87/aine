@@ -83,10 +83,27 @@ static void exec_method(AineInterp *interp,
     int jni_start = 0;
     if (!is_static && all_count > 0) { this_obj = reg_obj(&all_args[0]); jni_start = 1; }
     int jni_n = all_count - jni_start;
+    /* Box primitive args as string objects so JNI dispatch can read them */
+    AineObj prim_boxes[8];
+    char    prim_bufs[8][32];
     AineObj *args[8] = {0};
-    for (int a = 0; a < jni_n && a < 8; a++) args[a] = reg_obj(&all_args[jni_start + a]);
+    for (int a = 0; a < jni_n && a < 8; a++) {
+        const Reg *r = &all_args[jni_start + a];
+        if (r->kind == REG_OBJ) {
+            args[a] = r->obj;
+        } else {
+            snprintf(prim_bufs[a], sizeof(prim_bufs[a]), "%lld", (long long)r->prim);
+            prim_boxes[a] = (AineObj){0};
+            prim_boxes[a].type = OBJ_STRING;
+            prim_boxes[a].str  = prim_bufs[a];
+            args[a] = &prim_boxes[a];
+        }
+    }
     JniResult r = jni_dispatch(class_desc, method_name, this_obj, args, jni_n, is_static);
-    if (result_out && !r.is_void) reg_set_obj(result_out, r.obj);
+    if (result_out && !r.is_void) {
+        if (r.obj) reg_set_obj(result_out, r.obj);
+        else reg_set_prim(result_out, r.prim);
+    }
 }
 
 // ── 35c arg decode helper ─────────────────────────────────────────────────────
@@ -170,14 +187,12 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
 
         // ── 0x0f return vx ─────────────────────────────────────────────
         case 0x0f: {
-            result_reg = regs[byte_hi(insn)];
-            return 0;
+            result_reg = regs[byte_hi(insn)];            if (result_out) *result_out = result_reg;            return 0;
         }
 
         // ── 0x11 return-object vx ─────────────────────────────────────
         case 0x11: {
-            result_reg = regs[byte_hi(insn)];
-            return 0;
+            result_reg = regs[byte_hi(insn)];            if (result_out) *result_out = result_reg;            return 0;
         }
 
         // ── 0x12 const/4 vx, #+D ─────────────────────────────────────
@@ -352,11 +367,391 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             pc += 3; break;
         }
 
+        // ── Invoke-range group 3rc (0x74..0x78) ──────────────────────
+        // 3rc: {vCCCC .. vCCCC+AA-1}, method@BBBB
+        case 0x74: case 0x75: case 0x76: case 0x77: case 0x78: {
+            int ac       = (insn >> 8) & 0xff;
+            uint16_t midx = insns[pc + 1];
+            int base_reg  = insns[pc + 2];
+            const char *cls  = dex_method_class(interp->df, midx);
+            const char *name = dex_method_name(interp->df, midx);
+            int is_static = (op == 0x77);
+            Reg all_args[256];
+            for (int i = 0; i < ac && i < 256 && (base_reg + i) < N; i++)
+                all_args[i] = regs[base_reg + i];
+            exec_method(interp, cls, name, all_args, ac, is_static, &result_reg);
+            pc += 3; break;
+        }
+
+        // ── 0x23 new-array vx, vy, type@CCCC  22c ────────────────────
+        case 0x23: {
+            int vx = (insn >> 8) & 0xf;
+            int vy = (insn >> 12) & 0xf;
+            int len = (int)reg_prim(&regs[vy]);
+            AineObj *arr = heap_array_new(len);
+            reg_set_obj(&regs[vx], arr);
+            pc += 2; break;
+        }
+
+        // ── 0x44..0x4d aget/aput variants  23x: vAA, vBB, vCC ────────
+        // insns[0]=(vAA<<8)|op   insns[1]=(vCC<<8)|vBB
+        case 0x44: case 0x45: case 0x46: case 0x47:
+        case 0x48: case 0x49: case 0x4a: {
+            // aget: vA <- vB[vC]
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;          /* array ref */
+            int vC = (insns[pc + 1] >> 8) & 0xff;   /* index */
+            AineObj *arr = reg_obj(&regs[vB]);
+            int idx = (int)reg_prim(&regs[vC]);
+            if (!arr || arr->type != OBJ_ARRAY) {
+                reg_set_prim(&regs[vA], 0); pc += 2; break;
+            }
+            if (op == 0x46) {  /* aget-object */
+                if (idx >= 0 && idx < arr->arr_len)
+                    reg_set_obj(&regs[vA], arr->arr_obj[idx]);
+                else reg_set_obj(&regs[vA], NULL);
+            } else {
+                if (idx >= 0 && idx < arr->arr_len)
+                    reg_set_prim(&regs[vA], arr->arr_prim[idx]);
+                else reg_set_prim(&regs[vA], 0);
+            }
+            pc += 2; break;
+        }
+        // aput variants 0x4b..0x51: vB[vC] <- vA
+        case 0x4b: case 0x4c: case 0x4d: case 0x4e: case 0x4f:
+        case 0x50: case 0x51: {
+            int vA = (insn >> 8) & 0xff;             /* value */
+            int vB = insns[pc + 1] & 0xff;           /* array ref */
+            int vC = (insns[pc + 1] >> 8) & 0xff;   /* index */
+            AineObj *arr = reg_obj(&regs[vB]);
+            int idx = (int)reg_prim(&regs[vC]);
+            if (arr && arr->type == OBJ_ARRAY && idx >= 0 && idx < arr->arr_len) {
+                if (op == 0x4d) {  /* aput-object */
+                    arr->arr_obj[idx] = reg_obj(&regs[vA]);
+                } else {
+                    arr->arr_prim[idx] = reg_prim(&regs[vA]);
+                }
+            }
+            pc += 2; break;
+        }
+
+        // ── Arithmetic opcodes 0x90..0xcf ─────────────────────────────
+        // 23x: vAA, vBB, vCC
+        // 12x: vA, vB  (2-address form, dest == src1)
+#define ARITH_BINOP(dst_r, a, b, op_code) do {             \
+    switch (op_code) {                                      \
+        case 0x90: case 0xb0: reg_set_prim(dst_r,(int32_t)(a)+(int32_t)(b)); break; \
+        case 0x91: case 0xb1: reg_set_prim(dst_r,(int32_t)(a)-(int32_t)(b)); break; \
+        case 0x92: case 0xb2: reg_set_prim(dst_r,(int32_t)(a)*(int32_t)(b)); break; \
+        case 0x93: case 0xb3: reg_set_prim(dst_r,(b)!=0?(int32_t)(a)/(int32_t)(b):0); break; \
+        case 0x94: case 0xb4: reg_set_prim(dst_r,(b)!=0?(int32_t)(a)%(int32_t)(b):0); break; \
+        case 0x95: case 0xb5: reg_set_prim(dst_r,(int32_t)(a)&(int32_t)(b)); break;  \
+        case 0x96: case 0xb6: reg_set_prim(dst_r,(int32_t)(a)|(int32_t)(b)); break;  \
+        case 0x97: case 0xb7: reg_set_prim(dst_r,(int32_t)(a)^(int32_t)(b)); break;  \
+        case 0x98: case 0xb8: reg_set_prim(dst_r,(int32_t)(a)<<((b)&31)); break;     \
+        case 0x99: case 0xb9: reg_set_prim(dst_r,(int32_t)(a)>>((b)&31)); break;     \
+        case 0x9a: case 0xba: reg_set_prim(dst_r,(int32_t)((uint32_t)(a)>>((b)&31)));break;\
+        /* long (64-bit) variants 0xa0..0xaa */ \
+        case 0xa0: case 0xbb: reg_set_prim(dst_r,(int64_t)(a)+(int64_t)(b)); break;  \
+        case 0xa1: case 0xbc: reg_set_prim(dst_r,(int64_t)(a)-(int64_t)(b)); break;  \
+        case 0xa2: case 0xbd: reg_set_prim(dst_r,(int64_t)(a)*(int64_t)(b)); break;  \
+        case 0xa3: case 0xbe: reg_set_prim(dst_r,(b)!=0?(int64_t)(a)/(int64_t)(b):0);break;\
+        case 0xa4: case 0xbf: reg_set_prim(dst_r,(b)!=0?(int64_t)(a)%(int64_t)(b):0);break;\
+        case 0xa5: case 0xc0: reg_set_prim(dst_r,(int64_t)(a)&(int64_t)(b)); break;  \
+        case 0xa6: case 0xc1: reg_set_prim(dst_r,(int64_t)(a)|(int64_t)(b)); break;  \
+        case 0xa7: case 0xc2: reg_set_prim(dst_r,(int64_t)(a)^(int64_t)(b)); break;  \
+        case 0xa8: case 0xc3: reg_set_prim(dst_r,(int64_t)(a)<<((b)&63)); break;     \
+        case 0xa9: case 0xc4: reg_set_prim(dst_r,(int64_t)(a)>>((b)&63)); break;     \
+        case 0xaa: case 0xc5: reg_set_prim(dst_r,(int64_t)((uint64_t)(a)>>((b)&63)));break;\
+        /* float/double (0xab..0xb0 float, 0xc6..0xcf double) treated as int */ \
+        default: reg_set_prim(dst_r, 0); break;            \
+    }                                                       \
+} while(0)
+
+        // add-int/sub-int/.../rem-long 23x: vAA, vBB, vCC
+        case 0x90: case 0x91: case 0x92: case 0x93: case 0x94:
+        case 0x95: case 0x96: case 0x97: case 0x98: case 0x99: case 0x9a:
+        case 0xa0: case 0xa1: case 0xa2: case 0xa3: case 0xa4:
+        case 0xa5: case 0xa6: case 0xa7: case 0xa8: case 0xa9: case 0xaa: {
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;
+            int vC = (insns[pc + 1] >> 8) & 0xff;
+            ARITH_BINOP(&regs[vA], reg_prim(&regs[vB]), reg_prim(&regs[vC]), op);
+            pc += 2; break;
+        }
+
+        // 2-addr forms: 0xb0..0xcf 12x: vA, vB (dest = vA op vB)
+        case 0xb0: case 0xb1: case 0xb2: case 0xb3: case 0xb4:
+        case 0xb5: case 0xb6: case 0xb7: case 0xb8: case 0xb9: case 0xba:
+        case 0xbb: case 0xbc: case 0xbd: case 0xbe: case 0xbf:
+        case 0xc0: case 0xc1: case 0xc2: case 0xc3: case 0xc4: case 0xc5: {
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            ARITH_BINOP(&regs[vA], reg_prim(&regs[vA]), reg_prim(&regs[vB]), op);
+            pc++; break;
+        }
+
+        // lit16 arithmetic 0xd0..0xd7 22s: vA, vB, #+CCCC
+        case 0xd0: case 0xd1: case 0xd2: case 0xd3:
+        case 0xd4: case 0xd5: case 0xd6: case 0xd7: {
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            int16_t lit = (int16_t)insns[pc + 1];
+            int64_t a = reg_prim(&regs[vB]);
+            switch (op) {
+                case 0xd0: reg_set_prim(&regs[vA], (int32_t)a + lit); break;
+                case 0xd1: reg_set_prim(&regs[vA], (int32_t)a - lit); break;
+                case 0xd2: reg_set_prim(&regs[vA], (int32_t)a * lit); break;
+                case 0xd3: reg_set_prim(&regs[vA], lit ? (int32_t)a / lit : 0); break;
+                case 0xd4: reg_set_prim(&regs[vA], lit ? (int32_t)a % lit : 0); break;
+                case 0xd5: reg_set_prim(&regs[vA], (int32_t)a & lit); break;
+                case 0xd6: reg_set_prim(&regs[vA], (int32_t)a | lit); break;
+                case 0xd7: reg_set_prim(&regs[vA], (int32_t)a ^ lit); break;
+            }
+            pc += 2; break;
+        }
+
+        // lit8 arithmetic 0xd8..0xe2 22b: vAA, vBB, #+CC
+        case 0xd8: case 0xd9: case 0xda: case 0xdb:
+        case 0xdc: case 0xdd: case 0xde: case 0xdf:
+        case 0xe0: case 0xe1: case 0xe2: {
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;
+            int8_t lit = (int8_t)((insns[pc + 1] >> 8) & 0xff);
+            int64_t a  = reg_prim(&regs[vB]);
+            switch (op) {
+                case 0xd8: reg_set_prim(&regs[vA], (int32_t)a + lit); break;
+                case 0xd9: reg_set_prim(&regs[vA], (int32_t)a - lit); break;
+                case 0xda: reg_set_prim(&regs[vA], (int32_t)a * lit); break;
+                case 0xdb: reg_set_prim(&regs[vA], lit ? (int32_t)a / lit : 0); break;
+                case 0xdc: reg_set_prim(&regs[vA], lit ? (int32_t)a % lit : 0); break;
+                case 0xdd: reg_set_prim(&regs[vA], (int32_t)a & lit); break;
+                case 0xde: reg_set_prim(&regs[vA], (int32_t)a | lit); break;
+                case 0xdf: reg_set_prim(&regs[vA], (int32_t)a ^ lit); break;
+                case 0xe0: reg_set_prim(&regs[vA], (int32_t)a << (lit & 31)); break;
+                case 0xe1: reg_set_prim(&regs[vA], (int32_t)a >> (lit & 31)); break;
+                case 0xe2: reg_set_prim(&regs[vA], (int32_t)((uint32_t)a >> (lit & 31))); break;
+            }
+            pc += 2; break;
+        }
+
+        // int-to-* / long-to-* conversions 0x81..0x8f 12x: vA, vB
+        case 0x81: case 0x82: case 0x83: case 0x84: case 0x85:
+        case 0x86: case 0x87: case 0x88: case 0x8b: case 0x8c:
+        case 0x8d: case 0x8e: case 0x8f: {
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            int64_t v = reg_prim(&regs[vB]);
+            switch (op) {
+                case 0x81: reg_set_prim(&regs[vA], (int64_t)(int32_t)v); break; // int-to-long
+                case 0x82: reg_set_prim(&regs[vA], (int64_t)(float)(int32_t)v); break;
+                case 0x83: reg_set_prim(&regs[vA], (int64_t)(double)(int32_t)v); break;
+                case 0x84: reg_set_prim(&regs[vA], (int32_t)(int64_t)v); break; // long-to-int
+                case 0x85: reg_set_prim(&regs[vA], (int64_t)(float)(int64_t)v); break;
+                case 0x86: reg_set_prim(&regs[vA], (int64_t)(double)(int64_t)v); break;
+                case 0x87: reg_set_prim(&regs[vA], (int64_t)(int32_t)(float)v); break; // float-to-int
+                case 0x88: reg_set_prim(&regs[vA], (int64_t)(int64_t)(float)v); break; // float-to-long
+                case 0x8b: reg_set_prim(&regs[vA], (int64_t)(int32_t)(double)v); break; // double-to-int
+                case 0x8c: reg_set_prim(&regs[vA], (int64_t)(double)v); break;
+                case 0x8d: reg_set_prim(&regs[vA], (int32_t)(int8_t)v); break;  // int-to-byte
+                case 0x8e: reg_set_prim(&regs[vA], (int32_t)(uint16_t)v); break;// int-to-char
+                case 0x8f: reg_set_prim(&regs[vA], (int32_t)(int16_t)v); break; // int-to-short
+                default:   reg_set_prim(&regs[vA], v); break;
+            }
+            pc++; break;
+        }
+        case 0x7b: case 0x7c: case 0x7d: case 0x7e:
+        case 0x7f: case 0x80: {
+            // unary: neg-int, not-int, neg-long, not-long, neg-float, neg-double
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            int64_t v = reg_prim(&regs[vB]);
+            switch (op) {
+                case 0x7b: reg_set_prim(&regs[vA], -(int32_t)v); break; // neg-int
+                case 0x7c: reg_set_prim(&regs[vA], ~(int32_t)v); break; // not-int
+                case 0x7d: reg_set_prim(&regs[vA], -(int64_t)v); break; // neg-long
+                case 0x7e: reg_set_prim(&regs[vA], ~(int64_t)v); break; // not-long
+                default:   reg_set_prim(&regs[vA], -v); break;
+            }
+            pc++; break;
+        }
+
+        // ── 0x15 const/high16 vAA, #+BBBB0000 ───────────────────────
+        case 0x15: {
+            int vx = byte_hi(insn);
+            int32_t lit = (int32_t)((uint32_t)insns[pc + 1] << 16);
+            reg_set_prim(&regs[vx], lit);
+            pc += 2; break;
+        }
+        // ── 0x16 const-wide/16 vAA, #+BBBB ──────────────────────────
+        case 0x16: {
+            int vx = byte_hi(insn);
+            int64_t lit = (int64_t)(int16_t)insns[pc + 1];
+            reg_set_prim(&regs[vx], lit);
+            pc += 2; break;
+        }
+        // ── 0x17 const-wide/32 ──────────────────────────────────────
+        case 0x17: {
+            int vx = byte_hi(insn);
+            int64_t lit = (int64_t)(int32_t)((uint32_t)insns[pc+1]|(uint32_t)insns[pc+2]<<16);
+            reg_set_prim(&regs[vx], lit);
+            pc += 3; break;
+        }
+        // ── 0x18 const-wide ─────────────────────────────────────────
+        case 0x18: {
+            int vx = byte_hi(insn);
+            uint64_t lo = (uint32_t)insns[pc+1] | ((uint32_t)insns[pc+2] << 16);
+            uint64_t hi = (uint32_t)insns[pc+3] | ((uint32_t)insns[pc+4] << 16);
+            reg_set_prim(&regs[vx], (int64_t)(lo | (hi << 32)));
+            pc += 5; break;
+        }
+        // ── 0x19 const-wide/high16 ───────────────────────────────────
+        case 0x19: {
+            int vx = byte_hi(insn);
+            int64_t lit = (int64_t)((uint64_t)(uint16_t)insns[pc+1] << 48);
+            reg_set_prim(&regs[vx], lit);
+            pc += 2; break;
+        }
+
+        // ── 0x04 move-wide vA, vB 12x ──────────────────────────────
+        case 0x04: {
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            regs[vA] = regs[vB]; pc++; break;
+        }
+        // ── 0x05 move-wide/from16 22x ──────────────────────────────
+        case 0x05: {
+            int vA = (insn >> 8) & 0xff, vB = insns[pc+1];
+            regs[vA] = regs[vB]; pc += 2; break;
+        }
+        // ── 0x08 move-object/from16 22x ────────────────────────────
+        case 0x08: {
+            int vA = (insn >> 8) & 0xff, vB = insns[pc+1];
+            regs[vA] = regs[vB]; pc += 2; break;
+        }
+        // ── 0x09 move-object/16 32x ─────────────────────────────────
+        case 0x09: {
+            int vA = insns[pc+1], vB = insns[pc+2];
+            if (vA < N && vB < N) regs[vA] = regs[vB];
+            pc += 3; break;
+        }
+        // ── 0x0d move-exception vAA ──────────────────────────────────
+        case 0x0d:
+            memset(&regs[byte_hi(insn)], 0, sizeof(Reg));
+            pc++; break;
+
+        // ── 0x10 return-wide vAA ─────────────────────────────────────
+        case 0x10: {
+            result_reg = regs[byte_hi(insn)];            if (result_out) *result_out = result_reg;            return 0;
+        }
+
+        // ── 0x1c const-class vAA, type@BBBB 21c ─────────────────────
+        case 0x1c: {
+            int vx = byte_hi(insn);
+            const char *type = dex_type_name(interp->df, insns[pc + 1]);
+            reg_set_obj(&regs[vx], heap_string(type ? type : ""));
+            pc += 2; break;
+        }
+        // ── 0x1d monitor-enter / 0x1e monitor-exit ──────────────────
+        case 0x1d: case 0x1e: pc++; break;
+        // ── 0x1f check-cast vAA, type@CCCC 21c ──────────────────────
+        case 0x1f: pc += 2; break;
+        // ── 0x20 instance-of vA, vB, type@CCCC 22c ──────────────────
+        case 0x20: {
+            int vA = (insn >> 8) & 0xf;
+            reg_set_prim(&regs[vA], 0);  // stub: always false for now
+            pc += 2; break;
+        }
+        // ── 0x21 array-length vA, vB 12x ────────────────────────────
+        case 0x21: {
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            AineObj *arr = reg_obj(&regs[vB]);
+            int len = (arr && arr->type == OBJ_ARRAY) ? arr->arr_len : 0;
+            reg_set_prim(&regs[vA], len);
+            pc++; break;
+        }
+        // ── 0x24 filled-new-array 35c — stub: build int array ────────
+        case 0x24: {
+            int arg_rs[5]; int ac = decode_35c(insn, insns[pc + 2], arg_rs);
+            AineObj *arr = heap_array_new(ac);
+            if (arr) {
+                for (int i = 0; i < ac; i++)
+                    arr->arr_prim[i] = reg_prim(&regs[arg_rs[i]]);
+            }
+            result_reg.kind = REG_OBJ; result_reg.obj = arr;
+            pc += 3; break;
+        }
+        // ── 0x25 filled-new-array/range 3rc ──────────────────────────
+        case 0x25: {
+            int ac = (insn >> 8) & 0xff, base_r = insns[pc + 2];
+            AineObj *arr = heap_array_new(ac);
+            if (arr) {
+                for (int i = 0; i < ac && (base_r + i) < N; i++)
+                    arr->arr_prim[i] = reg_prim(&regs[base_r + i]);
+            }
+            result_reg.kind = REG_OBJ; result_reg.obj = arr;
+            pc += 3; break;
+        }
+        // ── 0x26 fill-array-data vAA, +BBBBBBBB 31t ──────────────────
+        // Payload at pc+offset; skip for now (just advance)
+        case 0x26:
+            pc += 3; break;
+
+        // ── 0x2b packed-switch 31t ──────────────────────────────────
+        case 0x2b: {
+            int vA = byte_hi(insn);
+            int32_t rel = (int32_t)((uint32_t)insns[pc+1]|(uint32_t)insns[pc+2]<<16);
+            int32_t key = (int32_t)reg_prim(&regs[vA]);
+            const uint16_t *payload = insns + (int32_t)pc + rel;
+            // payload: 0x0100, size, first_key, [targets...]
+            if (payload[0] == 0x0100) {
+                uint16_t sz = payload[1];
+                int32_t first_key = (int32_t)((uint32_t)payload[2]|(uint32_t)payload[3]<<16);
+                int idx = key - first_key;
+                if (idx >= 0 && idx < (int)sz) {
+                    int32_t off = (int32_t)((uint32_t)payload[4+2*idx]|(uint32_t)payload[5+2*idx]<<16);
+                    pc = (uint32_t)((int32_t)pc + off); break;
+                }
+            }
+            pc += 3; break;
+        }
+        // ── 0x2c sparse-switch 31t ──────────────────────────────────
+        case 0x2c: {
+            int vA = byte_hi(insn);
+            int32_t rel = (int32_t)((uint32_t)insns[pc+1]|(uint32_t)insns[pc+2]<<16);
+            int32_t key = (int32_t)reg_prim(&regs[vA]);
+            const uint16_t *payload = insns + (int32_t)pc + rel;
+            // payload: 0x0200, size, [keys...], [targets...]
+            if (payload[0] == 0x0200) {
+                uint16_t sz = payload[1];
+                for (uint16_t i = 0; i < sz; i++) {
+                    int32_t k = (int32_t)((uint32_t)payload[2+2*i]|(uint32_t)payload[3+2*i]<<16);
+                    if (k == key) {
+                        int32_t off = (int32_t)((uint32_t)payload[2+2*sz+2*i]|(uint32_t)payload[3+2*sz+2*i]<<16);
+                        pc = (uint32_t)((int32_t)pc + off); goto next_insn;
+                    }
+                }
+            }
+            pc += 3; break;
+        }
+
+        // ── 0x2d..0x31 cmp-* variants ───────────────────────────────
+        case 0x2d: case 0x2e: case 0x2f: case 0x30: case 0x31: {
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;
+            int vC = (insns[pc + 1] >> 8) & 0xff;
+            int64_t a = reg_prim(&regs[vB]), b_ = reg_prim(&regs[vC]);
+            int32_t cmp_res = (a < b_) ? -1 : (a > b_) ? 1 : 0;
+            reg_set_prim(&regs[vA], cmp_res);
+            pc += 2; break;
+        }
+
+        // ── 0x52..0x58 iget real impl (lookup via DEX field table) ────
+        // Already handled above as stubs — real impl:
+        // for now just leave as zero-return stubs
+
         // ── Unhandled ─────────────────────────────────────────────────
         default:
             fprintf(stderr, "[aine-dalvik] unhandled opcode 0x%02x at pc=%u\n", op, pc);
             pc++; break;
         }
+        continue;
+        next_insn: ;  /* target for goto (sparse-switch) */
     }
 }
 

@@ -556,7 +556,7 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F3 | aine-binder (Binder IPC) | ✅ |
 | F4 | PackageManager mínimo (APK parser) | ✅ |
 | F5 | Loader de libs nativas (.so ARM64) | ✅ |
-| F6 | ART completo (ClassLoader + reflection) | ⬜ |
+| F6 | ART completo (aine-dalvik Ruta B: opcodes + JNI) | ✅ |
 | F7 | Gráficos: ANGLE + Metal | ⬜ |
 | F8 | Input: teclado y ratón | ⬜ |
 | F9 | Audio: CoreAudio HAL | ⬜ |
@@ -564,8 +564,8 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F11 | Primera app visual real | ⬜ |
 | F12 | Optimización + beta pública | ⬜ |
 
-**Próximo paso: F6 — ART completo (ClassLoader + reflection)**
+**Próximo paso: F7 — Gráficos: ANGLE + Metal**
 
 ---
 
-*Actualizado: 20 marzo 2026 — F0→F5 completadas, F6 es el siguiente paso*
+*Actualizado: 20 marzo 2026 — F0→F6 completadas, F7 es el siguiente paso*

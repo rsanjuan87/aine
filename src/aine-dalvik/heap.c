@@ -44,3 +44,13 @@ AineObj *heap_userclass(int class_def_idx) {
     o->uc.class_def_idx = class_def_idx;
     return o;
 }
+
+AineObj *heap_array_new(int len) {
+    if (len < 0) len = 0;
+    AineObj *o   = calloc(1, sizeof(AineObj));
+    o->type      = OBJ_ARRAY;
+    o->arr_len   = len;
+    o->arr_prim  = (int64_t *)calloc((size_t)(len > 0 ? len : 1), sizeof(int64_t));
+    o->arr_obj   = (AineObj **)calloc((size_t)(len > 0 ? len : 1), sizeof(AineObj *));
+    return o;
+}
