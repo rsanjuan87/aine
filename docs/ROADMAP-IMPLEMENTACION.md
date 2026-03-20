@@ -183,49 +183,54 @@ ctest --test-dir build -R binder --output-on-failure
 **Objetivo:** Parsear un APK real, extraer `classes.dex` y las libs .so nativas,
 y pasarlos al intérprete aine-dalvik o al loader de .so.
 
-### T4.1 — Parser de APK (ZIP) ⬜
-- ⬜ `src/aine-pm/apk.h` / `apk.c` — leer APK como ZIP
-  - ⬜ Enumerar entradas del ZIP central directory
-  - ⬜ Extraer `classes.dex` a directorio temporal
-  - ⬜ Extraer `lib/arm64-v8a/*.so` a directorio temporal
-  - ⬜ Extraer `AndroidManifest.xml` (binario AXML)
-- ⬜ Usar `libz` (disponible en macOS) para decompresión DEFLATE
+### T4.1 — Parser de APK (ZIP) ✅
+- ✅ `src/aine-pm/zip.h` / `zip.c` — leer APK como ZIP con libz
+  - ✅ EOCD scan para localizar Central Directory
+  - ✅ Parser de Central Directory (todos los entries)
+  - ✅ Extraer entries: STORED (method 0) y DEFLATE (method 8) vía zlib raw
+  - ✅ `zip_extract_mem` / `zip_extract` / `zip_foreach`
 
-### T4.2 — Parser AndroidManifest.xml binario (AXML) ⬜
-- ⬜ `src/aine-pm/axml.h` / `axml.c` — parser AXML binario Android
-  - ⬜ Leer chunk header (tipo, tamaño)
-  - ⬜ String pool chunk — tabla de strings del manifiesto
-  - ⬜ Extraer `package`, `versionName`, `versionCode`
-  - ⬜ Extraer activity principal (`action=android.intent.action.MAIN`)
-  - ⬜ Extraer lista de permisos declarados
+### T4.2 — Parser AndroidManifest.xml binario (AXML) ✅
+- ✅ `src/aine-pm/axml.h` / `axml.c` — parser AXML binario Android
+  - ✅ String pool (UTF-16LE y UTF-8 flag)
+  - ✅ START_ELEMENT con attribute scan
+  - ✅ Extrae `package`, `versionName`, `versionCode`, `minSdk`, `targetSdk`
+  - ✅ Detecta activity principal via `action=android.intent.action.MAIN`
+  - ✅ Extrae permisos declarados (`uses-permission`)
 
-### T4.3 — Registro de paquetes ⬜
-- ⬜ `src/aine-pm/pm.h` / `pm.c` — base de datos en memoria de APKs instalados
-  - ⬜ `pm_install(path)` — instala APK: parsea, extrae, registra
-  - ⬜ `pm_query(package_name)` — devuelve ruta a dex y .so extraídos
-  - ⬜ `pm_list()` — lista paquetes instalados
+### T4.3 — Registro de paquetes ✅
+- ✅ `src/aine-pm/apk.h` / `apk.c` + `pm.h` / `pm.c`
+  - ✅ `pm_install(path)` — extrae a `/tmp/aine/<pkg>/`, registra en `packages.db`
+  - ✅ `pm_query(package_name)` — lookup en packages.db
+  - ✅ `pm_list()` — tabla de paquetes instalados
+  - ✅ `pm_remove(package_name)`
 
-### T4.4 — CLI aine-pm ⬜
-- ⬜ `src/aine-pm/main.c` — `aine-pm install <apk>`, `aine-pm list`
+### T4.4 — CLI aine-pm ✅
+- ✅ `src/aine-pm/main.c` — `install`, `list`, `query`, `remove`, `run`
+- ✅ `aine-pm run <pkg>` llama a `dalvikvm -cp <dex> <MainClass>` via execvp
 
-### T4.5 — Test ⬜
-- ⬜ `tests/pm/` — test que instala un APK mínimo y verifica extracción
+### T4.5 — Test ✅
+- ✅ `tests/pm/test_pm.c` — 3 tests: ZIP open, AXML parse, APK install pipeline
+- ✅ CTest `pm-install` — 7/7 tests pass en suite completa
 
 **Cómo verificar F4:**
 ```bash
-cmake --build build --target aine-pm
+camke --build build --target aine-pm
+ctest --test-dir build -R pm --output-on-failure
+# Esperado: Test #7: pm-install ... Passed
 
-# Instalar APK de prueba
-./build/aine-pm install test-apps/M3TestApp/app-debug.apk
+# Instalar APK de prueba y listar
+./build/aine-pm install test-apps/M3TestApp/M3TestApp.apk
 # Esperado:
-# [aine-pm] Extracting classes.dex -> /tmp/aine/com.example.m3test/classes.dex
-# [aine-pm] Extracting lib/arm64-v8a/libnative.so -> /tmp/aine/com.example.m3test/lib/
-# [aine-pm] Package installed: com.example.m3test
-# [aine-pm] Main activity: com.example.m3test.MainActivity
+# [aine-pm] extracted: /tmp/aine/com.aine.testapp/classes.dex
+# [aine-pm] Package:       com.aine.testapp
+# [aine-pm] Version:       1.0 (code 1)
+# [aine-pm] Main activity: com.aine.testapp.MainActivity
+# [aine-pm] Installed: com.aine.testapp
 
 ./build/aine-pm list
-# Esperado:
-# com.example.m3test  v1.0  /tmp/aine/com.example.m3test/
+# PACKAGE                                   VERSION       DEX
+# com.aine.testapp                          1.0           /tmp/aine/com.aine.testapp/classes.dex
 ```
 
 ---
@@ -542,7 +547,7 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F1 | aine-dalvik (intérprete DEX) | ✅ |
 | F2 | aine-shim (syscalls Linux→macOS) | ✅ |
 | F3 | aine-binder (Binder IPC) | ✅ |
-| F4 | PackageManager mínimo (APK parser) | ⬜ |
+| F4 | PackageManager mínimo (APK parser) | ✅ |
 | F5 | Loader de libs nativas (.so ARM64) | ⬜ |
 | F6 | ART completo (ClassLoader + reflection) | ⬜ |
 | F7 | Gráficos: ANGLE + Metal | ⬜ |
@@ -552,8 +557,8 @@ completamente — UI visible, input funciona, ciclo de vida limpio.
 | F11 | Primera app visual real | ⬜ |
 | F12 | Optimización + beta pública | ⬜ |
 
-**Próximo paso: F4 — PackageManager mínimo (APK parser)**
+**Próximo paso: F5 — Loader de libs nativas (.so ARM64)**
 
 ---
 
-*Actualizado: 20 marzo 2026 — F0→F3 completadas, F4 es el siguiente paso*
+*Actualizado: 20 marzo 2026 — F0→F4 completadas, F5 es el siguiente paso*

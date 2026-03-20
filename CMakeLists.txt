@@ -35,6 +35,7 @@ add_subdirectory(src/aine-binder)
 add_subdirectory(src/aine-hals)
 add_subdirectory(src/aine-launcher)
 add_subdirectory(src/aine-dalvik)
+add_subdirectory(src/aine-pm)
 
 enable_testing()
 add_subdirectory(tests)
