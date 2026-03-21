@@ -21,6 +21,11 @@ static NSLock      *g_lock     = nil;
 static atomic_int   g_dirty    = ATOMIC_VAR_INIT(0);
 static int          g_in_frame = 0;  /* suppresses per-call dirty marking */
 
+/* Front buffer: last complete frame, swapped in by end_frame.
+ * Main thread always blits from here, never from the in-progress back buffer. */
+static CGImageRef   g_front_image = NULL;
+static NSLock      *g_front_lock  = nil;
+
 /* Mark dirty only outside a frame; end_frame marks once after full onDraw */
 #define MARK_DIRTY() do { if (!g_in_frame) atomic_store(&g_dirty, 1); } while(0)
 
@@ -36,6 +41,7 @@ static int          g_in_frame = 0;  /* suppresses per-call dirty marking */
 void aine_canvas_init(int w, int h)
 {
     g_lock = [[NSLock alloc] init];
+    g_front_lock = [[NSLock alloc] init];
     g_cw = w; g_ch = h;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     g_ctx = CGBitmapContextCreate(NULL,
@@ -54,12 +60,32 @@ void aine_canvas_init(int w, int h)
 void aine_canvas_destroy(void)
 {
     if (g_ctx) { CGContextRelease(g_ctx); g_ctx = NULL; }
+    [g_front_lock lock];
+    if (g_front_image) { CGImageRelease(g_front_image); g_front_image = NULL; }
+    [g_front_lock unlock];
     g_lock = nil;
+    g_front_lock = nil;
 }
 
 /* ── Frame batching ─────────────────────────────────────────────────── */
 void aine_canvas_begin_frame(void) { g_in_frame = 1; }
-void aine_canvas_end_frame(void)   { g_in_frame = 0; atomic_store(&g_dirty, 1); }
+void aine_canvas_end_frame(void)
+{
+    g_in_frame = 0;
+    /* Snapshot the completed back buffer into the front buffer.
+     * Main thread (copy_cgimage) always reads g_front_image, so it
+     * never sees a partially-drawn frame (e.g. white flash from drawColor). */
+    [g_lock lock];
+    CGImageRef snap = CGBitmapContextCreateImage(g_ctx);
+    [g_lock unlock];
+
+    [g_front_lock lock];
+    if (g_front_image) CGImageRelease(g_front_image);
+    g_front_image = snap;
+    [g_front_lock unlock];
+
+    atomic_store(&g_dirty, 1);
+}
 
 /* ── Drawing calls ───────────────────────────────────────────────────── */
 
@@ -243,9 +269,11 @@ void aine_canvas_clear_dirty(void) { atomic_store(&g_dirty, 0); }
 /* ── Image snapshot ──────────────────────────────────────────────────── */
 void *aine_canvas_copy_cgimage(void)
 {
-    if (!g_ctx || !g_lock) return NULL;
-    [g_lock lock];
-    CGImageRef img = CGBitmapContextCreateImage(g_ctx);
-    [g_lock unlock];
+    if (!g_front_lock) return NULL;
+    /* Return retained copy of the last complete frame.  Never returns a
+     * partial frame because the back buffer is only promoted on end_frame. */
+    [g_front_lock lock];
+    CGImageRef img = g_front_image ? CGImageRetain(g_front_image) : NULL;
+    [g_front_lock unlock];
     return (void *)img;
 }

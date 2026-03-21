@@ -1112,6 +1112,8 @@ static void activity_event_loop(AineInterp *interp,
         /* Interactive: 60-second safety cap; exits early on finish signal */
         int64_t deadline_ns   = interp_now_ns() + 60LL * 1000000000LL;
         int64_t idle_since_ns = interp_now_ns();
+        int64_t last_draw_ns  = 0;  /* timestamp of last onDraw — for 60fps cap */
+        static const int64_t FRAME_NS = 16666667LL;  /* 1/60 s in ns */
 
         while (!aine_activity_should_finish() && interp_now_ns() < deadline_ns) {
             handler_drain(interp, 50);  /* 50 ms chunk */
@@ -1120,6 +1122,18 @@ static void activity_event_loop(AineInterp *interp,
             /* onDraw dispatch: if the content view was invalidated, call onDraw */
             AineObj *view = jni_get_content_view();
             if (view && view->class_desc && jni_pop_invalidated()) {
+                /* 60 fps cap: if last frame was less than 16.67 ms ago, wait */
+                int64_t now = interp_now_ns();
+                if (last_draw_ns > 0) {
+                    int64_t elapsed = now - last_draw_ns;
+                    if (elapsed < FRAME_NS) {
+                        struct timespec ts;
+                        int64_t wait = FRAME_NS - elapsed;
+                        ts.tv_sec  = wait / 1000000000LL;
+                        ts.tv_nsec = wait % 1000000000LL;
+                        nanosleep(&ts, NULL);
+                    }
+                }
                 static AineObj s_canvas = {
                     .type = OBJ_USERCLASS,
                     .class_desc = "Landroid/graphics/Canvas;"
@@ -1134,7 +1148,8 @@ static void activity_event_loop(AineInterp *interp,
 #ifdef __APPLE__
                 aine_canvas_end_frame();   /* marks dirty once for the complete frame */
 #endif
-                idle_since_ns = interp_now_ns(); /* drawing resets idle clock */
+                last_draw_ns  = interp_now_ns();
+                idle_since_ns = last_draw_ns; /* drawing resets idle clock */
                 g_draw_count++;
                 if (g_max_frames > 0 && g_draw_count >= g_max_frames) {
                     fprintf(stderr, "[arcs] frames-complete:%d\n", g_draw_count);
