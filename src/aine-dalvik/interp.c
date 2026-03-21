@@ -19,6 +19,7 @@
 #include <string.h>
 #include <time.h>    /* clock_gettime, nanosleep */
 #include <stdint.h>
+#include <math.h>    /* fmodf, fmod */
 
 // ── Register ────────────────────────────────────────────────────────────
 typedef enum { REG_PRIM, REG_OBJ } RegKind;
@@ -71,16 +72,26 @@ static void exec_method(AineInterp *interp,
                         Reg *all_args, int all_count, int is_static,
                         Reg *result_out) {
     if (result_out) { result_out->kind = REG_PRIM; result_out->prim = 0; }
-    // Try DEX
+    // Try DEX — walk the superclass chain within this DEX file
     int cdef = dex_find_class(interp->df, class_desc);
     if (cdef >= 0) {
-        int midx = dex_find_method(interp->df, cdef, method_name, NULL);
-        if (midx >= 0) {
-            const DexCodeItem *ci = dex_code_item(interp->df, cdef, midx);
-            if (ci) { exec_code(interp, ci, all_args, all_count, result_out); return; }
+        int at = cdef;
+        while (at >= 0) {
+            int midx = dex_find_method(interp->df, at, method_name, NULL);
+            if (midx >= 0) {
+                const DexCodeItem *ci = dex_code_item(interp->df, at, midx);
+                if (ci) { exec_code(interp, ci, all_args, all_count, result_out); return; }
+                /* Found abstract/native — fall out to JNI */
+                goto jni_fallthrough;
+            }
+            /* Method not in this class: try DEX superclass */
+            const char *super = dex_class_super(interp->df, at);
+            if (!super) break;
+            at = dex_find_class(interp->df, super);
         }
-        return; // abstract/native/constructor — no-op
+        /* Not found in DEX hierarchy — fall through to JNI */
     }
+    jni_fallthrough:;
     // JNI
     AineObj *this_obj = NULL;
     int jni_start = 0;
@@ -546,13 +557,51 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             pc += 2; break;
         }
 
-        // 2-addr forms: 0xb0..0xcf 12x: vA, vB (dest = vA op vB)
+        // 2-addr forms: 0xb0..0xc5 12x: vA, vB (dest = vA op vB) — int/long
         case 0xb0: case 0xb1: case 0xb2: case 0xb3: case 0xb4:
         case 0xb5: case 0xb6: case 0xb7: case 0xb8: case 0xb9: case 0xba:
         case 0xbb: case 0xbc: case 0xbd: case 0xbe: case 0xbf:
         case 0xc0: case 0xc1: case 0xc2: case 0xc3: case 0xc4: case 0xc5: {
             int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
             ARITH_BINOP(&regs[vA], reg_prim(&regs[vA]), reg_prim(&regs[vB]), op);
+            pc++; break;
+        }
+
+        // float/2addr 0xc6..0xca and double/2addr 0xcb..0xcf  12x: vA, vB
+        case 0xc6: case 0xc7: case 0xc8: case 0xc9: case 0xca:
+        case 0xcb: case 0xcc: case 0xcd: case 0xce: case 0xcf: {
+            int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
+            if (op <= 0xca) {  /* float */
+                uint32_t ua = (uint32_t)reg_prim(&regs[vA]);
+                uint32_t ub = (uint32_t)reg_prim(&regs[vB]);
+                float fa, fb;
+                memcpy(&fa, &ua, 4); memcpy(&fb, &ub, 4);
+                float fr = 0.0f;
+                switch (op) {
+                    case 0xc6: fr = fa + fb; break;
+                    case 0xc7: fr = fa - fb; break;
+                    case 0xc8: fr = fa * fb; break;
+                    case 0xc9: fr = fb != 0.0f ? fa / fb : 0.0f; break;
+                    case 0xca: fr = fb != 0.0f ? fmodf(fa, fb) : 0.0f; break;
+                }
+                uint32_t ur; memcpy(&ur, &fr, 4);
+                reg_set_prim(&regs[vA], ur);
+            } else {  /* double */
+                int64_t ia = reg_prim(&regs[vA]);
+                int64_t ib = reg_prim(&regs[vB]);
+                double da, db;
+                memcpy(&da, &ia, 8); memcpy(&db, &ib, 8);
+                double dr = 0.0;
+                switch (op) {
+                    case 0xcb: dr = da + db; break;
+                    case 0xcc: dr = da - db; break;
+                    case 0xcd: dr = da * db; break;
+                    case 0xce: dr = db != 0.0 ? da / db : 0.0; break;
+                    case 0xcf: dr = db != 0.0 ? fmod(da, db) : 0.0; break;
+                }
+                int64_t ir; memcpy(&ir, &dr, 8);
+                reg_set_prim(&regs[vA], ir);
+            }
             pc++; break;
         }
 
@@ -899,6 +948,11 @@ static int64_t interp_now_ns(void) {
 static int g_window_mode = 0;
 void interp_set_window_mode(int enabled) { g_window_mode = enabled; }
 
+/* Max onDraw frames before auto-exit (0 = unlimited). */
+static int g_max_frames = 0;
+static int g_draw_count = 0;
+void interp_set_max_frames(int n) { g_max_frames = n; g_draw_count = 0; }
+
 /* ── Input dispatch (macOS only) ──────────────────────────────────────────
  * Include inputflinger header for AineInputEvent; compile-guarded on Apple. */
 #ifdef __APPLE__
@@ -985,6 +1039,11 @@ static void activity_event_loop(AineInterp *interp,
                 draw_args[1].kind = REG_OBJ; draw_args[1].obj = &s_canvas;
                 exec_method(interp, view->class_desc, "onDraw", draw_args, 2, 0, NULL);
                 idle_since_ns = interp_now_ns(); /* drawing resets idle clock */
+                g_draw_count++;
+                if (g_max_frames > 0 && g_draw_count >= g_max_frames) {
+                    fprintf(stderr, "[arcs] frames-complete:%d\n", g_draw_count);
+                    return;
+                }
             }
 
             if (!handler_pending() && !had_input) {

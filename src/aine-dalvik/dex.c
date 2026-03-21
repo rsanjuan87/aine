@@ -150,6 +150,14 @@ int dex_find_class(const DexFile *df, const char *descriptor) {
     return -1;
 }
 
+const char *dex_class_super(const DexFile *df, int class_def_idx) {
+    const DexClassDef *defs = (const DexClassDef *)(df->data + df->hdr->class_defs_off);
+    if (class_def_idx < 0 || (uint32_t)class_def_idx >= df->hdr->class_defs_size) return NULL;
+    uint32_t super_idx = defs[class_def_idx].superclass_idx;
+    if (super_idx == 0xFFFFFFFFu) return NULL;  /* java/lang/Object */
+    return dex_type_name(df, super_idx);
+}
+
 // ── Class data: iterate encoded methods ───────────────────────────────────
 // Fills 'out_methods' (max_methods entries), returns count of direct+virtual methods
 static int decode_class_methods(const DexFile *df, const DexClassDef *cdef,

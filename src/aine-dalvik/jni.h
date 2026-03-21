@@ -35,4 +35,4 @@ int64_t  jni_sget_prim(const char *class_desc, const char *field_name);
 /* Content view for onDraw dispatch (set by Activity.setContentView(View)) */
 struct AineObj;
 struct AineObj *jni_get_content_view(void);
-int             jni_pop_invalidated(void);  /* returns 1 if invalidate() was called */
+int             jni_pop_invalidated(void);

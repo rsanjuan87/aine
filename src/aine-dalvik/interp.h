@@ -19,6 +19,10 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor);
 // When disabled (default), Activity mode uses a simple handler drain (10 s cap).
 void interp_set_window_mode(int enabled);
 
+// Limit the number of onDraw calls before auto-exiting (0 = unlimited).
+// Useful for testing animated Activities that never call finish() themselves.
+void interp_set_max_frames(int n);
+
 // Invoke a Runnable's run() method using the class stored in runnable->class_desc.
 // No-op if runnable is NULL or has no class_desc.
 void interp_run_runnable(AineInterp *interp, AineObj *runnable);

@@ -128,6 +128,46 @@ void aine_canvas_draw_circle(float cx, float cy, float r, uint32_t argb)
     atomic_store(&g_dirty, 1);
 }
 
+/* ── Arc (Android semantics: degrees CW from 3-o'clock) ─────────────── */
+void aine_canvas_draw_arc(float l, float t, float r, float b,
+                          float start_deg, float sweep_deg,
+                          int use_center, uint32_t argb)
+{
+    if (!g_ctx || r <= l || b <= t) return;
+    [g_lock lock];
+    CGContextSetRGBFillColor(g_ctx, CH_R(argb), CH_G(argb), CH_B(argb), ALPHA(argb));
+
+    /* y-flip: CG origin is bottom-left */
+    float cg_t = (float)g_ch - b;
+    float w    = r - l;
+    float h    = b - t;
+    float cx   = l + w * 0.5f;
+    float cy   = cg_t + h * 0.5f;
+    float rx   = w * 0.5f;
+    float ry   = h * 0.5f;
+
+    /* Android: CW from 3-o'clock → CG: after y-flip, CCW negated = we pass clockwise=1 */
+    float cg_start = (float)(-(double)start_deg * M_PI / 180.0);
+    float cg_end   = (float)(-(double)(start_deg + sweep_deg) * M_PI / 180.0);
+
+    /* Build elliptic arc path using a unit-circle + scale transform */
+    CGAffineTransform xf = CGAffineTransformMakeTranslation(cx, cy);
+    xf = CGAffineTransformScale(xf, rx, ry);
+
+    CGMutablePathRef path = CGPathCreateMutable();
+    if (use_center)
+        CGPathMoveToPoint(path, &xf, 0.0f, 0.0f);
+    CGPathAddArc(path, &xf, 0.0f, 0.0f, 1.0f, cg_start, cg_end, 1 /*clockwise*/);
+    CGPathCloseSubpath(path);
+
+    CGContextAddPath(g_ctx, path);
+    CGContextFillPath(g_ctx);
+    CGPathRelease(path);
+
+    [g_lock unlock];
+    atomic_store(&g_dirty, 1);
+}
+
 /* ── Dimensions ──────────────────────────────────────────────────────── */
 int aine_canvas_width(void)  { return g_cw; }
 int aine_canvas_height(void) { return g_ch; }

@@ -182,6 +182,21 @@ AineObj *jni_sget_object(const char *class_desc, const char *field_name) {
         if (strcmp(field_name, "out") == 0) return &g_system_out;
         if (strcmp(field_name, "err") == 0) return &g_system_err;
     }
+    /* Paint.Style enum constants — return a stub; setStyle() is a no-op renderer side */
+    if (strstr(class_desc, "Paint$Style") || strstr(class_desc, "Paint.Style")) {
+        AineObj *s = calloc(1, sizeof(AineObj));
+        s->type = OBJ_USERCLASS; s->class_desc = class_desc;
+        heap_iput_prim(s, "value",
+            strcmp(field_name, "FILL")         == 0 ? 0LL :
+            strcmp(field_name, "STROKE")        == 0 ? 1LL : 2LL);
+        return s;
+    }
+    /* Suppress noisy warnings for common static-object fields we don't need */
+    if (strstr(class_desc, "android/") || strstr(class_desc, "java/")) {
+        AineObj *stub = calloc(1, sizeof(AineObj));
+        stub->type = OBJ_USERCLASS; stub->class_desc = class_desc;
+        return stub;
+    }
     fprintf(stderr, "[aine-dalvik] sget-object: unknown field %s->%s\n",
             class_desc, field_name);
     return NULL;
@@ -1470,7 +1485,10 @@ JniResult jni_dispatch(const char *class_desc,
         strstr(class_desc, "android/support/") ||
         strstr(class_desc, "androidx/")) {
         if (!strcmp(method_name, "<init>")) {
-            if (this_obj) this_obj->class_desc = class_desc;
+            /* Only set class_desc from framework <init> if the object doesn't
+             * already have a more specific (user-defined) class_desc. */
+            if (this_obj && !this_obj->class_desc)
+                this_obj->class_desc = class_desc;
             return res;
         }
         if (!strcmp(method_name, "setVisibility") ||
@@ -1489,7 +1507,6 @@ JniResult jni_dispatch(const char *class_desc,
             !strcmp(method_name, "setBackground") ||
             !strcmp(method_name, "setLayoutParams") ||
             !strcmp(method_name, "requestLayout") ||
-            !strcmp(method_name, "invalidate") ||
             !strcmp(method_name, "bringToFront") ||
             !strcmp(method_name, "addView") ||
             !strcmp(method_name, "removeView") ||
@@ -1555,7 +1572,8 @@ JniResult jni_dispatch(const char *class_desc,
     if (strstr(class_desc, "android/widget/") ||
         strstr(class_desc, "android/app/AlertDialog")) {
         if (!strcmp(method_name, "<init>")) {
-            if (this_obj) this_obj->class_desc = class_desc;
+            if (this_obj && !this_obj->class_desc)
+                this_obj->class_desc = class_desc;
             return res;
         }
         if (!strcmp(method_name, "setText") && nargs >= 1) {
@@ -1678,10 +1696,28 @@ JniResult jni_dispatch(const char *class_desc,
     // ── android.graphics.* ──────────────────────────────────────────────
     if (strstr(class_desc, "android/graphics/")) {
         if (!strcmp(method_name, "<init>")) {
-            /* Paint: default color black, textSize 16 */
+            if (this_obj && strstr(class_desc, "RectF")) {
+                /* RectF(left, top, right, bottom) */
+                this_obj->class_desc = "Landroid/graphics/RectF;";
+                if (nargs >= 4) {
+                    heap_iput_prim(this_obj, "left",   arg_prim(args[0]));
+                    heap_iput_prim(this_obj, "top",    arg_prim(args[1]));
+                    heap_iput_prim(this_obj, "right",  arg_prim(args[2]));
+                    heap_iput_prim(this_obj, "bottom", arg_prim(args[3]));
+                }
+                return res;
+            }
             if (this_obj && strstr(class_desc, "Paint")) {
-                heap_iput_prim(this_obj, "color",    0xFF000000LL);
-                heap_iput_prim(this_obj, "textsize", 0x41800000LL); /* 16.0f bits */
+                /* Copy constructor: new Paint(src) */
+                if (nargs >= 1 && args[0] && args[0]->class_desc &&
+                    strstr(args[0]->class_desc, "Paint")) {
+                    heap_iput_prim(this_obj, "color",    heap_iget_prim(args[0], "color"));
+                    heap_iput_prim(this_obj, "textsize", heap_iget_prim(args[0], "textsize"));
+                } else {
+                    /* Default constructor */
+                    heap_iput_prim(this_obj, "color",    0xFF000000LL);
+                    heap_iput_prim(this_obj, "textsize", 0x41800000LL); /* 16.0f bits */
+                }
             }
             return res;
         }
@@ -1717,6 +1753,22 @@ JniResult jni_dispatch(const char *class_desc,
             uint32_t c = (uint32_t)arg_prim(args[0]);
             if ((c & 0xFF000000u) == 0) c |= 0xFF000000u;
             aine_canvas_clear(c);
+#endif
+            return res;
+        }
+        if (!strcmp(method_name, "drawRect") && nargs == 2 && args[0] &&
+            args[0]->class_desc && strstr(args[0]->class_desc, "RectF")) {
+#ifdef __APPLE__
+            /* drawRect(RectF oval, Paint paint) */
+            union { int64_t i; float f; } lv, tv, rv, bv;
+            lv.i = heap_iget_prim(args[0], "left");
+            tv.i = heap_iget_prim(args[0], "top");
+            rv.i = heap_iget_prim(args[0], "right");
+            bv.i = heap_iget_prim(args[0], "bottom");
+            AineObj *paint = args[1];
+            uint32_t color = paint ? (uint32_t)heap_iget_prim(paint, "color") : 0xFF888888u;
+            if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
+            aine_canvas_fill_rect(lv.f, tv.f, rv.f - lv.f, bv.f - tv.f, color);
 #endif
             return res;
         }
@@ -1767,12 +1819,34 @@ JniResult jni_dispatch(const char *class_desc,
         }
         if (!strcmp(method_name, "drawLine") ||
             !strcmp(method_name, "drawBitmap") || !strcmp(method_name, "drawPath") ||
-            !strcmp(method_name, "drawArc") || !strcmp(method_name, "drawOval") ||
+            !strcmp(method_name, "drawOval") ||
             !strcmp(method_name, "drawRoundRect") || !strcmp(method_name, "clipRect") ||
             !strcmp(method_name, "save") || !strcmp(method_name, "restore") ||
             !strcmp(method_name, "translate") || !strcmp(method_name, "scale") ||
             !strcmp(method_name, "rotate") || !strcmp(method_name, "concat") ||
             !strcmp(method_name, "setMatrix")) {
+            return res;
+        }
+        if (!strcmp(method_name, "drawArc") && nargs >= 5) {
+#ifdef __APPLE__
+            /* drawArc(RectF oval, float startAngle, float sweepAngle, boolean useCenter, Paint) */
+            AineObj *rectf  = args[0];
+            float start_deg = arg_float(args[1]);
+            float sweep_deg = arg_float(args[2]);
+            int   use_center = (int)arg_prim(args[3]);
+            AineObj *paint  = args[4];
+            uint32_t color  = paint ? (uint32_t)heap_iget_prim(paint, "color") : 0xFF888888u;
+            if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
+            if (rectf) {
+                union { int64_t i; float f; } lv, tv, rv, bv;
+                lv.i = heap_iget_prim(rectf, "left");
+                tv.i = heap_iget_prim(rectf, "top");
+                rv.i = heap_iget_prim(rectf, "right");
+                bv.i = heap_iget_prim(rectf, "bottom");
+                aine_canvas_draw_arc(lv.f, tv.f, rv.f, bv.f,
+                                     start_deg, sweep_deg, use_center, color);
+            }
+#endif
             return res;
         }
         if (!strcmp(method_name, "getWidth"))  { res.is_void = 0; res.prim = 800; return res; }
@@ -2006,6 +2080,26 @@ JniResult jni_dispatch(const char *class_desc,
 
     /* Generic <init> fallback — silently no-op for any unrecognized class */
     if (strcmp(method_name, "<init>") == 0) { res.is_void = 1; return res; }
+
+    /* ── Generic inherited View/Activity methods on user-defined subclasses ──
+     * When a user class (SampleView, etc.) inherits View/Activity methods that
+     * are not in DEX, they fall here. Handle key ones by name. */
+    if (!strcmp(method_name, "invalidate")) {
+        /* Any View.invalidate() call → mark content view dirty for redraw */
+        g_view_dirty = 1;
+        return res;
+    }
+    if (!strcmp(method_name, "getWidth"))    { res.is_void = 0; res.prim = 800; return res; }
+    if (!strcmp(method_name, "getHeight"))   { res.is_void = 0; res.prim = 600; return res; }
+    if (!strcmp(method_name, "requestFocus") || !strcmp(method_name, "setFocusable") ||
+        !strcmp(method_name, "setFocusableInTouchMode")) {
+        res.is_void = 0; res.prim = 1; return res;
+    }
+    if (!strcmp(method_name, "onStart")  || !strcmp(method_name, "onResume") ||
+        !strcmp(method_name, "onPause")  || !strcmp(method_name, "onStop")   ||
+        !strcmp(method_name, "onDestroy")|| !strcmp(method_name, "onSaveInstanceState")) {
+        return res;  /* lifecycle no-ops for user Activity subclasses */
+    }
 
     fprintf(stderr, "[aine-dalvik] unimplemented: %s->%s (nargs=%d)\n",
             class_desc, method_name, nargs);

@@ -168,3 +168,16 @@ set_tests_properties(g7-canvas-draw PROPERTIES
     PASS_REGULAR_EXPRESSION "\\[G7\\] frame:5.*\\[G7\\] draw-complete"
 )
 
+# T9.3: AOSP Arcs — first real FOSS app (unmodified AOSP sample, Apache 2.0)
+# Runs 5 animation frames of the Arcs demo through the full Dalvik→JNI→CoreGraphics stack.
+add_test(NAME t93-arcs-aosp
+    COMMAND dalvikvm --window --max-frames 5
+            -cp "${CMAKE_SOURCE_DIR}/test-apps/ArcsApp/classes.dex"
+            com.example.android.apis.graphics.Arcs
+)
+set_tests_properties(t93-arcs-aosp PROPERTIES
+    TIMEOUT 25
+    LABELS  "foss;t9.3;arcs;macos"
+    PASS_REGULAR_EXPRESSION "\\[arcs\\] frames-complete:5"
+)
+

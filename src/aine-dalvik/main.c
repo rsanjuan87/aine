@@ -3,7 +3,8 @@
 // Usage (compatible with real dalvikvm):
 //   dalvikvm [-cp <dexfile>] <ClassName> [args...]
 //   dalvikvm -Xnoimage-dex2oat -Xusejit:false -cp foo.dex ClassName
-//   dalvikvm --window -cp foo.dex ActivityClassName   (opens NSWindow)
+//   dalvikvm --window -cp foo.dex ActivityClassName         (opens NSWindow)
+//   dalvikvm --window --max-frames N -cp foo.dex ClassName  (exit after N frames)
 //
 // Flags starting with -X are accepted and silently ignored (ART compat).
 //
@@ -37,6 +38,7 @@ int main(int argc, char *argv[]) {
     const char *dex_path    = NULL;
     const char *class_name  = NULL;
     int         window_mode = 0;
+    int         max_frames  = 0;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -46,6 +48,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--window") == 0 ||
                    strcmp(argv[i], "-window")  == 0) {
             window_mode = 1;
+        } else if (strcmp(argv[i], "--max-frames") == 0) {
+            if (++i >= argc) { usage(argv[0]); return 1; }
+            max_frames = atoi(argv[i]);
         } else if (strncmp(argv[i], "-X", 2) == 0) {
             // ART flags — ignore silently
         } else if (strncmp(argv[i], "-D", 2) == 0) {
@@ -99,6 +104,8 @@ int main(int argc, char *argv[]) {
 
     // Run
     AineInterp *interp = interp_new(&df);
+    if (max_frames > 0)
+        interp_set_max_frames(max_frames);
     int ret;
     if (window_mode) {
         /* Open NSWindow + run Activity lifecycle (headless-safe) */

@@ -23,6 +23,9 @@ void aine_canvas_fill_rect(float x, float y, float w, float h, uint32_t argb);
 void aine_canvas_draw_text(float x, float y, const char *text,
                            float size, uint32_t argb);
 void aine_canvas_draw_circle(float cx, float cy, float r, uint32_t argb);
+void aine_canvas_draw_arc(float left, float top, float right, float bottom,
+                          float start_deg, float sweep_deg,
+                          int use_center, uint32_t argb);
 
 /* Dimensions */
 int aine_canvas_width(void);

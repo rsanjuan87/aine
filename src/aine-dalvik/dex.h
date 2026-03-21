@@ -96,6 +96,8 @@ const char *dex_method_proto(const DexFile *df, uint32_t method_idx); // proto s
 
 // Class lookup
 int dex_find_class(const DexFile *df, const char *descriptor); // returns class_def index
+// Superclass descriptor of a DEX class (NULL if java/lang/Object or not in DEX)
+const char *dex_class_super(const DexFile *df, int class_def_idx);
 // Method lookup within a class_def
 int dex_find_method(const DexFile *df, int class_def_idx, const char *name, const char *descriptor);
 
