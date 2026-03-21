@@ -84,8 +84,9 @@ static void exec_method(AineInterp *interp,
     int jni_start = 0;
     if (!is_static && all_count > 0) { this_obj = reg_obj(&all_args[0]); jni_start = 1; }
     int jni_n = all_count - jni_start;
-    /* Box primitive args as string objects so JNI dispatch can read them */
-    AineObj prim_boxes[8];
+    /* Box primitive args as string objects so JNI dispatch can read them.
+     * Use heap_string() so the boxing survives after exec_method returns
+     * (callers may store the result in heap arrays or fields). */
     char    prim_bufs[8][32];
     AineObj *args[8] = {0};
     for (int a = 0; a < jni_n && a < 8; a++) {
@@ -94,10 +95,7 @@ static void exec_method(AineInterp *interp,
             args[a] = r->obj;
         } else {
             snprintf(prim_bufs[a], sizeof(prim_bufs[a]), "%lld", (long long)r->prim);
-            prim_boxes[a] = (AineObj){0};
-            prim_boxes[a].type = OBJ_STRING;
-            prim_boxes[a].str  = prim_bufs[a];
-            args[a] = &prim_boxes[a];
+            args[a] = heap_string(prim_bufs[a]);  /* heap-allocated: safe to store */
         }
     }
     JniResult r = jni_dispatch(class_desc, method_name, this_obj, args, jni_n, is_static);
@@ -253,8 +251,15 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             AineObj *obj = NULL;
             if (type) {
                 if (strcmp(type, "Ljava/lang/StringBuilder;") == 0) {
-                    obj = heap_sb_new();
-                } else {
+                    obj = heap_sb_new();                } else if (strcmp(type, "Ljava/util/ArrayList;") == 0 ||
+                           strcmp(type, "Ljava/util/LinkedList;") == 0) {
+                    obj = heap_arraylist_new();
+                    obj->class_desc = type;
+                } else if (strcmp(type, "Ljava/util/HashMap;") == 0 ||
+                           strcmp(type, "Ljava/util/LinkedHashMap;") == 0 ||
+                           strcmp(type, "Ljava/util/TreeMap;") == 0) {
+                    obj = heap_hashmap_new();
+                    obj->class_desc = type;                } else {
                     int cd = dex_find_class(interp->df, type);
                     obj = (cd >= 0) ? heap_userclass(cd)
                                     : (AineObj *)calloc(1, sizeof(AineObj));
@@ -698,7 +703,25 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         // ── 0x20 instance-of vA, vB, type@CCCC 22c ──────────────────
         case 0x20: {
             int vA = (insn >> 8) & 0xf;
-            reg_set_prim(&regs[vA], 0);  // stub: always false for now
+            int vB = (insn >> 12) & 0xf;
+            const char *type = dex_type_name(interp->df, insns[pc + 1]);
+            AineObj *obj = reg_obj(&regs[vB]);
+            int r = 0;
+            if (obj && type) {
+                if (strcmp(type, "Ljava/lang/Object;") == 0) {
+                    r = 1;  /* everything extends Object */
+                } else if (strcmp(type, "Ljava/lang/String;") == 0) {
+                    r = (obj->type == OBJ_STRING || obj->type == OBJ_STRINGBUILDER) ? 1 : 0;
+                } else if (obj->class_desc && strcmp(obj->class_desc, type) == 0) {
+                    r = 1;
+                } else if (strcmp(type, "Ljava/util/List;") == 0 ||
+                           strcmp(type, "Ljava/util/Collection;") == 0) {
+                    r = (obj->type == OBJ_ARRAYLIST) ? 1 : 0;
+                } else if (strcmp(type, "Ljava/util/Map;") == 0) {
+                    r = (obj->type == OBJ_HASHMAP) ? 1 : 0;
+                }
+            }
+            reg_set_prim(&regs[vA], r);
             pc += 2; break;
         }
         // ── 0x21 array-length vA, vB 12x ────────────────────────────
@@ -709,32 +732,63 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             reg_set_prim(&regs[vA], len);
             pc++; break;
         }
-        // ── 0x24 filled-new-array 35c — stub: build int array ────────
+        // ── 0x24 filled-new-array 35c ────────────────────────────────────────────
         case 0x24: {
             int arg_rs[5]; int ac = decode_35c(insn, insns[pc + 2], arg_rs);
             AineObj *arr = heap_array_new(ac);
             if (arr) {
-                for (int i = 0; i < ac; i++)
-                    arr->arr_prim[i] = reg_prim(&regs[arg_rs[i]]);
+                for (int i = 0; i < ac; i++) {
+                    if (regs[arg_rs[i]].kind == REG_OBJ)
+                        arr->arr_obj[i]  = reg_obj(&regs[arg_rs[i]]);
+                    else
+                        arr->arr_prim[i] = reg_prim(&regs[arg_rs[i]]);
+                }
             }
             result_reg.kind = REG_OBJ; result_reg.obj = arr;
             pc += 3; break;
         }
-        // ── 0x25 filled-new-array/range 3rc ──────────────────────────
+        // ── 0x25 filled-new-array/range 3rc ────────────────────────────────────────
         case 0x25: {
             int ac = (insn >> 8) & 0xff, base_r = insns[pc + 2];
             AineObj *arr = heap_array_new(ac);
             if (arr) {
-                for (int i = 0; i < ac && (base_r + i) < N; i++)
-                    arr->arr_prim[i] = reg_prim(&regs[base_r + i]);
+                for (int i = 0; i < ac && (base_r + i) < N; i++) {
+                    if (regs[base_r + i].kind == REG_OBJ)
+                        arr->arr_obj[i]  = reg_obj(&regs[base_r + i]);
+                    else
+                        arr->arr_prim[i] = reg_prim(&regs[base_r + i]);
+                }
             }
             result_reg.kind = REG_OBJ; result_reg.obj = arr;
             pc += 3; break;
         }
-        // ── 0x26 fill-array-data vAA, +BBBBBBBB 31t ──────────────────
-        // Payload at pc+offset; skip for now (just advance)
-        case 0x26:
+        // ── 0x26 fill-array-data vAA, +BBBBBBBB 31t ────────────────────────
+        // Payload at pc+rel: ident(0x0300), elem_width, count(32bit), data
+        case 0x26: {
+            int vA = byte_hi(insn);
+            int32_t rel = (int32_t)((uint32_t)insns[pc+1] | ((uint32_t)insns[pc+2] << 16));
+            AineObj *arr = reg_obj(&regs[vA]);
+            if (arr && arr->type == OBJ_ARRAY && rel != 0) {
+                const uint16_t *payload = insns + (int32_t)pc + rel;
+                if (payload[0] == 0x0300) {
+                    uint16_t ew    = payload[1];
+                    uint32_t count = (uint32_t)payload[2] | ((uint32_t)payload[3] << 16);
+                    const uint8_t *data = (const uint8_t *)(payload + 4);
+                    uint32_t n = count < (uint32_t)arr->arr_len ? count : (uint32_t)arr->arr_len;
+                    for (uint32_t i = 0; i < n; i++) {
+                        int64_t v = 0;
+                        switch (ew) {
+                            case 1: v = (int8_t)data[i]; break;
+                            case 2: v = (int16_t)((uint16_t)data[2*i] | ((uint16_t)data[2*i+1] << 8)); break;
+                            case 4: { uint32_t u = (uint32_t)data[4*i]|(uint32_t)data[4*i+1]<<8|(uint32_t)data[4*i+2]<<16|(uint32_t)data[4*i+3]<<24; v=(int32_t)u; break; }
+                            case 8: { uint64_t u=0; for(int b=0;b<8;b++) u|=((uint64_t)data[8*i+b]<<(8*b)); v=(int64_t)u; break; }
+                        }
+                        arr->arr_prim[i] = v;
+                    }
+                }
+            }
             pc += 3; break;
+        }
 
         // ── 0x2b packed-switch 31t ──────────────────────────────────
         case 0x2b: {

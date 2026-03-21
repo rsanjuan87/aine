@@ -11,6 +11,8 @@ typedef enum {
     OBJ_STRINGBUILDER = 3,
     OBJ_USERCLASS    = 4,   // user-defined class from DEX
     OBJ_ARRAY        = 5,   // primitive / object array
+    OBJ_ARRAYLIST    = 6,   // java.util.ArrayList / LinkedList
+    OBJ_HASHMAP      = 7,   // java.util.HashMap / LinkedHashMap
 } ObjType;
 
 /* Instance field slot — stored inline in AineObj for user-defined classes */
@@ -25,9 +27,10 @@ typedef struct AineFieldSlot {
 
 typedef struct AineObj {
     ObjType type;
-    int     arr_len;         // OBJ_ARRAY: element count
+    int     arr_len;         // OBJ_ARRAY/LIST/MAP: element count
+    int     arr_cap;         // OBJ_ARRAYLIST/HASHMAP: allocated capacity
     int64_t *arr_prim;       // OBJ_ARRAY: primitive element storage
-    struct AineObj **arr_obj;// OBJ_ARRAY: object element storage (separate)
+    struct AineObj **arr_obj;// OBJ_ARRAY/LIST/MAP: object element storage
     union {
         char *str;               // OBJ_STRING: null-terminated UTF-8 (owned)
         struct {
@@ -71,3 +74,21 @@ void     heap_sput_prim(const char *cls, const char *field, int64_t value);
 void     heap_sput_obj (const char *cls, const char *field, AineObj *value);
 int64_t  heap_sget_prim(const char *cls, const char *field);
 AineObj *heap_sget_obj (const char *cls, const char *field);
+
+/* ArrayList (OBJ_ARRAYLIST) */
+AineObj *heap_arraylist_new(void);
+void     heap_arraylist_add(AineObj *list, AineObj *item);
+AineObj *heap_arraylist_get(const AineObj *list, int idx);
+void     heap_arraylist_set(AineObj *list, int idx, AineObj *item);
+int      heap_arraylist_remove_idx(AineObj *list, int idx);
+int      heap_arraylist_size(const AineObj *list);
+void     heap_arraylist_clear(AineObj *list);
+
+/* HashMap (OBJ_HASHMAP) — string-keyed, AineObj* values */
+AineObj *heap_hashmap_new(void);
+void     heap_hashmap_put(AineObj *map, const char *key, AineObj *val);
+AineObj *heap_hashmap_get(const AineObj *map, const char *key);
+int      heap_hashmap_contains_key(const AineObj *map, const char *key);
+void     heap_hashmap_remove(AineObj *map, const char *key);
+int      heap_hashmap_size(const AineObj *map);
+AineObj *heap_hashmap_keyset(const AineObj *map);  /* returns OBJ_ARRAYLIST */

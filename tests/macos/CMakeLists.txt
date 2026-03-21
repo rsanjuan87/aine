@@ -101,3 +101,13 @@ set_tests_properties(handler-loop PROPERTIES
     PASS_REGULAR_EXPRESSION "handler-fired"
 )
 
+# G2: stdlib — ArrayList, HashMap, Math, System.currentTimeMillis, String.format
+add_test(NAME g2-stdlib
+    COMMAND dalvikvm -cp "${CMAKE_SOURCE_DIR}/test-apps/G2Test/classes.dex" G2Test
+)
+set_tests_properties(g2-stdlib PROPERTIES
+    TIMEOUT 10
+    LABELS  "stdlib;g2;macos"
+    PASS_REGULAR_EXPRESSION "g2-done"
+)
+
