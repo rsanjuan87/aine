@@ -13,11 +13,12 @@ set(DALVIK_SOURCES
     main.c
 )
 
-# G5: --window mode — NSApplication + NSWindow + CAMetalLayer bootstrap
+# G5: --window mode — NSApplication + NSWindow bootstrap
 # G6/T8.2: keyboard.mm + pointer.mm — NSEvent → Android event bridge
+# G7/T9.2: canvas.m — CGBitmapContext software canvas for Android Canvas ops
 # Only compiled on macOS (Objective-C + AppKit)
 if(APPLE)
-    list(APPEND DALVIK_SOURCES window.m)
+    list(APPEND DALVIK_SOURCES window.m canvas.m)
     list(APPEND DALVIK_SOURCES
         "${CMAKE_SOURCE_DIR}/src/aine-hals/input/keyboard.mm"
         "${CMAKE_SOURCE_DIR}/src/aine-hals/input/pointer.mm"
@@ -45,6 +46,9 @@ if(APPLE)
     set_source_files_properties(window.m PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
+    set_source_files_properties(canvas.m PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc"
+    )
     set_source_files_properties(
         "${CMAKE_SOURCE_DIR}/src/aine-hals/input/keyboard.mm"
         "${CMAKE_SOURCE_DIR}/src/aine-hals/input/pointer.mm"
@@ -56,6 +60,8 @@ if(APPLE)
         "-framework AppKit"
         "-framework Metal"
         "-framework QuartzCore"
+        "-framework CoreGraphics"
+        "-framework CoreText"
     )
 endif()
 

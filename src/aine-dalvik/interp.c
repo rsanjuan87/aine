@@ -973,6 +973,20 @@ static void activity_event_loop(AineInterp *interp,
             handler_drain(interp, 50);  /* 50 ms chunk */
             int had_input = dispatch_input_events(interp, class_descriptor, this_reg);
 
+            /* onDraw dispatch: if the content view was invalidated, call onDraw */
+            AineObj *view = jni_get_content_view();
+            if (view && view->class_desc && jni_pop_invalidated()) {
+                static AineObj s_canvas = {
+                    .type = OBJ_USERCLASS,
+                    .class_desc = "Landroid/graphics/Canvas;"
+                };
+                Reg draw_args[2];
+                draw_args[0].kind = REG_OBJ; draw_args[0].obj = view;
+                draw_args[1].kind = REG_OBJ; draw_args[1].obj = &s_canvas;
+                exec_method(interp, view->class_desc, "onDraw", draw_args, 2, 0, NULL);
+                idle_since_ns = interp_now_ns(); /* drawing resets idle clock */
+            }
+
             if (!handler_pending() && !had_input) {
                 /* Idle — check 2-second auto-exit */
                 if (interp_now_ns() - idle_since_ns > 2LL * 1000000000LL) {

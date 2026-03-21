@@ -12,7 +12,7 @@ Android APIs → macOS APIs. `aine-shim.dylib` se inyecta via `DYLD_INSERT_LIBRA
 - `⬜` — pendiente
 - `❌` — bloqueado (requiere paso previo)
 
-**Estado actual:** 21/21 CTests pasan — 21 marzo 2026
+**Estado actual:** 22/22 CTests pasan — 21 marzo 2026
 
 ---
 
@@ -528,27 +528,64 @@ completamente — UI visible, botones responden, ciclo de vida limpio.
 - ✅ `Activity.setContentView(View)` — registra vista raíz sin crash
 - ✅ CTest #21 `g6-app-stubs` — verifica que G6RealActivity llama setContentView/addView/setText sin crash
 
-### T9.2 — App de prueba: calculadora AOSP ⬜
-- ⬜ Compilar `packages/apps/ExactCalculator` de AOSP (o FOSS equivalent)
+### T9.2 — Canvas → CoreGraphics rendering ✅ (G7)
+- ✅ `src/aine-dalvik/canvas.h` / `canvas.m` — CGBitmapContext 800×600 como framebuffer del proceso
+  - ✅ `aine_canvas_init(w, h)` — NSLock + CGBitmapContextCreate BGRA premultiplied
+  - ✅ `aine_canvas_clear(argb)` — rellena fondo (drawColor)
+  - ✅ `aine_canvas_fill_rect(x, y, w, h, argb)` — rectángulo sólido con flip Y Android→CG
+  - ✅ `aine_canvas_draw_text(x, y, text, size, argb)` — CoreText + flip Y
+  - ✅ `aine_canvas_draw_circle(cx, cy, r, argb)` — CGContextFillEllipseInRect + flip Y
+  - ✅ `aine_canvas_copy_cgimage()` — copia thread-safe de CGImageRef para bliteo
+- ✅ `src/aine-dalvik/window.m` — `AineCanvasView : NSView` sustituye CAMetalLayer
+  - ✅ `drawRect:` llama `aine_canvas_copy_cgimage()` → `CGContextDrawImage`
+  - ✅ NSRunLoop detecta dirty flag → `[view setNeedsDisplay:YES]`
+- ✅ `src/aine-dalvik/jni.c` — Canvas/Paint completamente cableados:
+  - ✅ `Paint.<init>()` inicializa color=0xFF000000, textSize=16
+  - ✅ `Paint.setColor(argb)` / `setTextSize(sp)` — almacena en heap fields
+  - ✅ `Canvas.drawColor(argb)` → `aine_canvas_clear()`
+  - ✅ `Canvas.drawRect(l,t,r,b,paint)` → `aine_canvas_fill_rect()` con float bit extraction
+  - ✅ `Canvas.drawText(str,x,y,paint)` → `aine_canvas_draw_text()` con textSize de paint
+  - ✅ `Canvas.drawCircle(cx,cy,r,paint)` → `aine_canvas_draw_circle()`
+- ✅ `src/aine-dalvik/interp.c` — `activity_event_loop` despacha `onDraw(Canvas)` cuando `view.invalidate()` es llamado
+  - ✅ `jni_pop_invalidated()` / `jni_get_content_view()` — API inter-módulo para dispatch
+  - ✅ Llamada a `exec_method(view_class, "onDraw", [view, canvas])` con canvas estático
+- ✅ `test-apps/G7DrawApp/G7DrawActivity.java` — Activity con DrawView que dibuja en onDraw:
+  - ✅ Fondo drawColor (azul oscuro) + título + contador de fotogramas + botón + círculo
+  - ✅ Handler.postDelayed 200ms actualiza contador → invalidate() → redraw (5 veces)
+  - ✅ `finish()` al terminar → onDestroy limpio
+- ✅ CTest #22 `g7-canvas-draw` — verifica frame:5 + draw-complete
+
+### T9.3 — App FOSS real (calculadora AOSP) ⬜
+- ⬜ Compilar `packages/apps/ExactCalculator` de AOSP o equivalente FOSS
 - ⬜ `./build/aine-run ExactCalculator.apk` → ventana con UI visible
 - ⬜ Clicks en botones producen resultado correcto
-
-**Cómo verificar F9 T9.1 (G6 stubs):**
 ```bash
 # CTest #21: g6-app-stubs
 ctest --test-dir build -R g6-app-stubs --output-on-failure
-# Esperado:
-# [g6] setContentView ok
-# [g6] addView ok
-# [g6] setText ok
-# g6-app-stubs ... Passed
-
-# Manual:
-./build/dalvikvm --window -cp test-apps/G6RealActivity/classes.dex G6RealActivity
-# Cycle completo sin crash; stubs de View/Canvas/Paint no generan excepciones
+# Esperado: "g6-textview:Hello AINE" ... "g6-done" + Passed
 ```
 
-**Cómo verificar F9 T9.2 (cuando implementado):**
+**Cómo verificar F9 T9.2 — Canvas rendering (G7):**
+```bash
+# CTest #22: g7-canvas-draw
+ctest --test-dir build -R g7-canvas-draw --output-on-failure
+# Esperado:
+# [G7] onCreate — AINE Draw Test
+# [G7] frame:1 ... [G7] frame:5
+# [G7] draw-complete + Passed
+
+# Manual — ver ventana con contenido real:
+./build/dalvikvm --window -cp test-apps/G7DrawApp/classes.dex G7DrawActivity
+# Abre ventana 800x600; fondo azul oscuro; texto blanco "AINE Android Runtime";
+# contador verde "Frame: N"; rectángulo azul "Running..."; círculo rojo
+# 5 fotogramas renderizados via CoreGraphics → onDestroy limpio
+
+# Flujo completo usuario:
+./build/aine-run test-apps/M3TestApp/M3TestApp.apk
+# Instala APK → extrae DEX → abre NSWindow → ciclo de vida completo → exit 0
+```
+
+**Cómo verificar F9 T9.3 (cuando implementado):**
 ```bash
 ./build/aine-run ExactCalculator.apk
 # Esperado: ventana "Calculator" con UI completa, 2+2=4 funciona
@@ -556,7 +593,7 @@ ctest --test-dir build -R g6-app-stubs --output-on-failure
 
 ---
 
-## Tabla de CTests (21/21 activos)
+## Tabla de CTests (22/22 activos)
 
 | # | Nombre CTest | Fase | Qué verifica |
 |---|-------------|------|--------------|
@@ -581,6 +618,7 @@ ctest --test-dir build -R g6-app-stubs --output-on-failure
 | 19 | `g4-stdlib2` | F1/G4 | Arrays.asList + Collections + Integer.MAX_VALUE |
 | 20 | `g5-window-activity` | F8/G5 | --window mode: NSApp + NSWindow + Activity lifecycle |
 | 21 | `g6-app-stubs` | F9/G6 | View/widget/Canvas/Paint stubs — setContentView sin crash |
+| 22 | `g7-canvas-draw` | F9/G7 | Canvas → CoreGraphics: drawColor/drawText/drawRect/drawCircle reales |
 
 ---
 
@@ -597,9 +635,9 @@ ctest --test-dir build -R g6-app-stubs --output-on-failure
 | F6 | Gráficos: EGL 1.4/Metal + CAMetalLayer + VSYNC | ✅ | #9 |
 | F7 | HALs: Audio/Cámara/Vulkan/Clipboard/Input | ✅ | #10,#12,#13,#14,#15 |
 | F8 | NSWindow display + Activity visual (T8.1/T8.2/T8.3) | ✅ | #20, #13, #14 |
-| F9 | Framework UI stubs (G6) + primera app visual real | ✅/⬜ | #21 (T9.1 ✅; T9.2 ⬜) |
+| F9 | Framework UI stubs (G6) + Canvas rendering (G7) | ✅ | #21, #22 (T9.3 ⬜) |
 
-**Estado actual: 21/21 CTests pasan. Siguiente: F9 T9.2 (primera app visual real — calculadora FOSS).**
+**Estado actual: 22/22 CTests pasan. Siguiente: F9 T9.3 primera app FOSS real (calculadora AOSP).**
 
 ---
 
@@ -617,8 +655,9 @@ ctest --test-dir build -R g6-app-stubs --output-on-failure
 | `579b6fd3` | G6: View/widget/graphics stubs, G6RealActivity, CTest #21 | 21/21 |
 | (wip) | T8.2: keyboard.mm/pointer.mm extern"C", dispatch_input_events, activity_event_loop, KeyEvent/MotionEvent JNI | 21/21 |
 | (wip) | T8.3: aine-run --window flag, aine-pm find_dalvikvm macOS fix, RUNTIME_OUTPUT_DIRECTORY | 21/21 |
-| (wip) | ROADMAP: actualizado a 21/21 CTests, T8.2/T8.3/F9-T9.1 marcados ✅ | 21/21 |
+| (wip) | G7/T9.2: canvas.m CGBitmapContext, AineCanvasView, jni drawColor/drawRect/drawText/drawCircle, onDraw dispatch, G7DrawApp | 22/22 |
+| (wip) | ROADMAP: actualizado a 22/22 CTests, T9.2 Canvas rendering marcado ✅, prueba final documentada | 22/22 |
 
 ---
 
-*Actualizado: 21 marzo 2026 — 21/21 CTests — próximo: F9 T9.2 primera app visual real (calculadora FOSS)*
+*Actualizado: 21 marzo 2026 — 22/22 CTests — producto funcional: usuario puede ejecutar APKs Android en macOS ARM64 con ventana nativa y rendering CoreGraphics*

@@ -156,3 +156,15 @@ set_tests_properties(g6-app-stubs PROPERTIES
     PASS_REGULAR_EXPRESSION "g6-textview:Hello AINE.*g6-toast-shown.*g6-color:ok.*g6-layout:ok.*g6-onDestroy.*g6-done"
 )
 
+# G7: Canvas rendering — drawColor/drawText/drawRect/drawCircle via CoreGraphics
+add_test(NAME g7-canvas-draw
+    COMMAND dalvikvm --window
+            -cp "${CMAKE_SOURCE_DIR}/test-apps/G7DrawApp/classes.dex"
+            G7DrawActivity
+)
+set_tests_properties(g7-canvas-draw PROPERTIES
+    TIMEOUT 25
+    LABELS  "canvas;g7;macos"
+    PASS_REGULAR_EXPRESSION "\\[G7\\] frame:5.*\\[G7\\] draw-complete"
+)
+

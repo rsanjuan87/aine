@@ -10,6 +10,9 @@
 #include <float.h>
 #include <sys/stat.h>
 #include <errno.h>
+#ifdef __APPLE__
+#include "canvas.h"
+#endif
 
 // ── Safe primitive arg reader ───────────────────────────────────────────
 // Primitive args from the interpreter are boxed as heap_string objects.
@@ -21,6 +24,20 @@ static inline int64_t arg_prim(const AineObj *a) {
     if (a->str)      return atoll(a->str);    /* boxed primitive from interp */
     return 0;
 }
+
+/* Extract IEEE 754 float stored as raw bits in a primitive arg */
+static inline float arg_float(const AineObj *a) {
+    union { int64_t i; float f; } v;
+    v.i = arg_prim(a);
+    return v.f;
+}
+
+/* ── Content view globals for onDraw dispatch ───────────────────────── */
+static AineObj *g_content_view = NULL;
+static int      g_view_dirty   = 0;
+
+AineObj *jni_get_content_view(void) { return g_content_view; }
+int      jni_pop_invalidated(void)  { int v = g_view_dirty; g_view_dirty = 0; return v; }
 
 // ── Static field singletons ──────────────────────────────────────────────
 static AineObj g_system_out = { .type = OBJ_PRINTSTREAM };
@@ -724,7 +741,6 @@ JniResult jni_dispatch(const char *class_desc,
         // All lifecycle methods are no-ops unless handled in DEX
         if (strcmp(method_name, "finish") == 0 ||
             strcmp(method_name, "startActivity") == 0 ||
-            strcmp(method_name, "setContentView") == 0 ||
             strcmp(method_name, "getSystemService") == 0 ||
             strcmp(method_name, "runOnUiThread") == 0 ||
             strcmp(method_name, "onCreate") == 0 ||
@@ -734,9 +750,21 @@ JniResult jni_dispatch(const char *class_desc,
             strcmp(method_name, "onStop") == 0 ||
             strcmp(method_name, "onDestroy") == 0 ||
             strcmp(method_name, "<init>") == 0 ||
-            strcmp(method_name, "invalidate") == 0 ||
             strcmp(method_name, "requestWindowFeature") == 0) {
             return res;  // is_void = 1
+        }
+        /* setContentView(View): store the view for onDraw dispatch */
+        if (strcmp(method_name, "setContentView") == 0) {
+            if (nargs >= 1 && args[0] && args[0]->type == OBJ_USERCLASS) {
+                g_content_view = args[0];
+                g_view_dirty   = 1;   /* trigger initial onDraw */
+            }
+            return res;
+        }
+        /* invalidate() called on Activity itself — trigger redraw */
+        if (strcmp(method_name, "invalidate") == 0) {
+            g_view_dirty = 1;
+            return res;
         }
         if (strcmp(method_name, "getResources") == 0) {
             static AineObj g_resources = { .type = OBJ_NULL, .class_desc = "Landroid/content/res/Resources;" };
@@ -1475,6 +1503,12 @@ JniResult jni_dispatch(const char *class_desc,
             if (this_obj) heap_iput_obj(this_obj, "onClick", args[0]);
             return res;
         }
+        /* View.invalidate() — mark content view dirty for onDraw dispatch */
+        if (!strcmp(method_name, "invalidate")) {
+            if (this_obj == g_content_view || g_content_view == NULL)
+                g_view_dirty = 1;
+            return res;
+        }
         if (!strcmp(method_name, "setOnLongClickListener") ||
             !strcmp(method_name, "setOnTouchListener") ||
             !strcmp(method_name, "setOnKeyListener") ||
@@ -1643,29 +1677,102 @@ JniResult jni_dispatch(const char *class_desc,
 
     // ── android.graphics.* ──────────────────────────────────────────────
     if (strstr(class_desc, "android/graphics/")) {
-        if (!strcmp(method_name, "<init>")) { return res; }
-        /* Paint */
-        if (!strcmp(method_name, "setColor") || !strcmp(method_name, "setStrokeWidth") ||
-            !strcmp(method_name, "setStyle") || !strcmp(method_name, "setAntiAlias") ||
-            !strcmp(method_name, "setTextSize") || !strcmp(method_name, "setTypeface") ||
-            !strcmp(method_name, "setAlpha") || !strcmp(method_name, "setFlags") ||
-            !strcmp(method_name, "reset") || !strcmp(method_name, "setShadowLayer")) {
+        if (!strcmp(method_name, "<init>")) {
+            /* Paint: default color black, textSize 16 */
+            if (this_obj && strstr(class_desc, "Paint")) {
+                heap_iput_prim(this_obj, "color",    0xFF000000LL);
+                heap_iput_prim(this_obj, "textsize", 0x41800000LL); /* 16.0f bits */
+            }
+            return res;
+        }
+        /* ── Paint setters ──────────────────────────────────────────── */
+        if (!strcmp(method_name, "setColor") && nargs >= 1) {
+            if (this_obj) heap_iput_prim(this_obj, "color", arg_prim(args[0]));
+            return res;
+        }
+        if (!strcmp(method_name, "setTextSize") && nargs >= 1) {
+            if (this_obj) heap_iput_prim(this_obj, "textsize", arg_prim(args[0]));
+            return res;
+        }
+        if (!strcmp(method_name, "getColor") && this_obj) {
+            res.is_void = 0;
+            res.prim = heap_iget_prim(this_obj, "color");
             return res;
         }
         if (!strcmp(method_name, "measureText") && nargs >= 1) {
             const char *s = args[0] && args[0]->str ? args[0]->str : "";
-            res.is_void = 0; res.prim = (int64_t)(strlen(s) * 8); return res; /* 8px/char approx */
+            res.is_void = 0; res.prim = (int64_t)(strlen(s) * 8); return res;
         }
-        /* Canvas */
-        if (!strcmp(method_name, "drawText") || !strcmp(method_name, "drawRect") ||
-            !strcmp(method_name, "drawCircle") || !strcmp(method_name, "drawLine") ||
+        if (!strcmp(method_name, "setStrokeWidth") ||
+            !strcmp(method_name, "setStyle") || !strcmp(method_name, "setAntiAlias") ||
+            !strcmp(method_name, "setTypeface") || !strcmp(method_name, "setAlpha") ||
+            !strcmp(method_name, "setFlags") || !strcmp(method_name, "reset") ||
+            !strcmp(method_name, "setShadowLayer") || !strcmp(method_name, "setFakeBoldText") ||
+            !strcmp(method_name, "setLetterSpacing") || !strcmp(method_name, "setXfermode")) {
+            return res;
+        }
+        /* ── Canvas drawing — wire to software canvas ────────────────── */
+        if (!strcmp(method_name, "drawColor") && nargs >= 1) {
+#ifdef __APPLE__
+            uint32_t c = (uint32_t)arg_prim(args[0]);
+            if ((c & 0xFF000000u) == 0) c |= 0xFF000000u;
+            aine_canvas_clear(c);
+#endif
+            return res;
+        }
+        if (!strcmp(method_name, "drawRect") && nargs >= 5) {
+#ifdef __APPLE__
+            float l = arg_float(args[0]);
+            float t = arg_float(args[1]);
+            float r = arg_float(args[2]);
+            float b = arg_float(args[3]);
+            AineObj *paint = args[4];
+            uint32_t color = paint ? (uint32_t)heap_iget_prim(paint, "color") : 0xFF888888u;
+            if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
+            aine_canvas_fill_rect(l, t, r - l, b - t, color);
+#endif
+            return res;
+        }
+        if (!strcmp(method_name, "drawText") && nargs >= 4) {
+#ifdef __APPLE__
+            /* drawText(String text, float x, float y, Paint paint) */
+            const char *text = args[0] && args[0]->str ? args[0]->str : "";
+            float x        = arg_float(args[1]);
+            float y        = arg_float(args[2]);
+            AineObj *paint = args[3];
+            uint32_t color = 0xFFFFFFFFu;
+            float    tsize = 16.0f;
+            if (paint) {
+                color = (uint32_t)heap_iget_prim(paint, "color");
+                if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
+                union { int64_t i; float f; } tv;
+                tv.i = heap_iget_prim(paint, "textsize");
+                if (tv.f > 0.5f) tsize = tv.f;
+            }
+            aine_canvas_draw_text(x, y, text, tsize, color);
+#endif
+            return res;
+        }
+        if (!strcmp(method_name, "drawCircle") && nargs >= 4) {
+#ifdef __APPLE__
+            float cx    = arg_float(args[0]);
+            float cy    = arg_float(args[1]);
+            float rad   = arg_float(args[2]);
+            AineObj *paint = args[3];
+            uint32_t color = paint ? (uint32_t)heap_iget_prim(paint, "color") : 0xFFFF0000u;
+            if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
+            aine_canvas_draw_circle(cx, cy, rad, color);
+#endif
+            return res;
+        }
+        if (!strcmp(method_name, "drawLine") ||
             !strcmp(method_name, "drawBitmap") || !strcmp(method_name, "drawPath") ||
             !strcmp(method_name, "drawArc") || !strcmp(method_name, "drawOval") ||
             !strcmp(method_name, "drawRoundRect") || !strcmp(method_name, "clipRect") ||
             !strcmp(method_name, "save") || !strcmp(method_name, "restore") ||
             !strcmp(method_name, "translate") || !strcmp(method_name, "scale") ||
             !strcmp(method_name, "rotate") || !strcmp(method_name, "concat") ||
-            !strcmp(method_name, "setMatrix") || !strcmp(method_name, "drawColor")) {
+            !strcmp(method_name, "setMatrix")) {
             return res;
         }
         if (!strcmp(method_name, "getWidth"))  { res.is_void = 0; res.prim = 800; return res; }

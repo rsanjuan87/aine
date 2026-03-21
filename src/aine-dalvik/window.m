@@ -33,8 +33,12 @@
 #include "keyboard.h"
 #include "pointer.h"
 
-/* ── Window state ───────────────────────────────────────────────────────── */
+/* Software canvas for Android Canvas ops */
+#include "canvas.h"
+
+/* ―― Window state ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――― */
 static NSWindow * __strong g_window = nil;
+static NSView   * __strong g_canvas_view = nil;
 
 /* ── Quit flag: set by window delegate or Activity.finish() ─────────────── */
 static atomic_int g_should_quit = ATOMIC_VAR_INIT(0);
@@ -47,13 +51,37 @@ void aine_activity_request_finish(void) {
     atomic_store(&g_should_quit, 1);
 }
 
-/* ── NSWindowDelegate — detect close button ─────────────────────────────── */
+/* ―― AineWindowDelegate — detect close button ―――――――――――――――――――――――――――― */
 @interface AineWindowDelegate : NSObject <NSWindowDelegate>
 @end
 @implementation AineWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     aine_activity_request_finish();
     return YES;
+}
+@end
+
+/* ―― AineCanvasView — blits CGBitmapContext to screen via drawRect: ―――――――― */
+@interface AineCanvasView : NSView
+@end
+@implementation AineCanvasView
+- (BOOL)isOpaque { return YES; }
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    CGImageRef img = (CGImageRef)aine_canvas_copy_cgimage();
+    if (!img) {
+        /* Fallback: dark background */
+        [[NSColor colorWithRed:0.08 green:0.08 blue:0.15 alpha:1.0]
+            setFill];
+        NSRectFill(self.bounds);
+        return;
+    }
+    CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
+    CGContextDrawImage(ctx, CGRectMake(0, 0,
+                       self.bounds.size.width,
+                       self.bounds.size.height), img);
+    CGImageRelease(img);
+    aine_canvas_clear_dirty();
 }
 @end
 
@@ -91,16 +119,18 @@ static int create_window(const char *title)
             return 0;
         }
 
-        /* CAMetalLayer backing */
         NSView *view = [g_window contentView];
         [view setWantsLayer:YES];
 
-        CAMetalLayer *layer = [CAMetalLayer layer];
-        layer.device        = dev;
-        layer.pixelFormat   = MTLPixelFormatBGRA8Unorm;
-        layer.framebufferOnly = NO;
-        layer.drawableSize  = CGSizeMake(800, 600);
-        [view setLayer:layer];
+        /* Initialize software canvas */
+        aine_canvas_init(800, 600);
+
+        /* Use AineCanvasView so drawRect: blits the CGBitmapContext */
+        AineCanvasView *cview =
+            [[AineCanvasView alloc] initWithFrame:[view bounds]];
+        [cview setAutoresizingMask:NSViewWidthSizable|NSViewHeightSizable];
+        [g_window setContentView:cview];
+        g_canvas_view = cview;
 
         NSString *nstitle = title
             ? [NSString stringWithUTF8String:title]
@@ -176,6 +206,10 @@ int aine_window_run(AineInterp *interp, const char *class_descriptor)
         @autoreleasepool {
             NSDate *until = [NSDate dateWithTimeIntervalSinceNow:0.016];
             [[NSRunLoop mainRunLoop] runUntilDate:until];
+            /* Repaint when the Android app drew something */
+            if (g_canvas_view && aine_canvas_is_dirty()) {
+                [g_canvas_view setNeedsDisplay:YES];
+            }
         }
     }
 
@@ -184,6 +218,8 @@ int aine_window_run(AineInterp *interp, const char *class_descriptor)
         [g_window close];
         g_window = nil;
     }
+    g_canvas_view = nil;
+    aine_canvas_destroy();
 
     /* Stop input monitors */
     aine_input_keyboard_stop();
