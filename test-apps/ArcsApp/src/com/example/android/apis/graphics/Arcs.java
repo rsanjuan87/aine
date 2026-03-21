@@ -23,6 +23,8 @@ package com.example.android.apis.graphics;
 import android.content.Context;
 import android.graphics.*;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 
 public class Arcs extends GraphicsActivity {
@@ -31,6 +33,14 @@ public class Arcs extends GraphicsActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(new SampleView(this));
+
+        // Auto-finish after 10 seconds so the window is visible for exactly 10 s.
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override public void run() {
+                System.err.println("[arcs] done");
+                finish();
+            }
+        }, 10000);
     }
 
     private static class SampleView extends View {

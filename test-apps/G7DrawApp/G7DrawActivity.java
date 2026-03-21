@@ -7,11 +7,11 @@
  *  3. view.invalidate() → dispara onDraw en cada tick
  *  4. onDraw: drawColor (fondo), drawText (título, contador), drawRect (botón),
  *             drawCircle (indicador) — todos mapeados a CoreGraphics
- *  5. Tras 5 ticks → finish() → onDestroy
+ *  5. Tras 50 ticks (10 s) → finish() → onDestroy
  *
  * Salida esperada en stderr:
  *   [G7] onCreate — AINE Draw Test
- *   [G7] frame:1 … [G7] frame:5
+ *   [G7] frame:1 … [G7] frame:50
  *   [G7] done — all frames rendered
  *   [G7] onDestroy
  *   [G7] draw-complete
@@ -104,7 +104,7 @@ public class G7DrawActivity extends Activity {
                 System.err.println("[G7] frame:" + mFrameCount);
                 mView.invalidate();     /* triggers onDraw via event loop */
 
-                if (mFrameCount < 5) {
+                if (mFrameCount < 50) {
                     scheduleFrame();
                 } else {
                     System.err.println("[G7] done — all frames rendered");
