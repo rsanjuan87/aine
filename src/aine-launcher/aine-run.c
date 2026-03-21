@@ -123,27 +123,28 @@ static int do_launch(const char *apk_path, int dry_run)
     printf("[aine-run] Activity: %s\n", main);
     printf("[aine-run] DEX:      %s\n", dex);
     printf("[aine-run] Libs:     %s\n", libs[0] ? libs : "(none)");
-    printf("[aine-run] Command:  %s -cp %s %s\n", g_dalvikvm_path, dex, main);
+    printf("[aine-run] Command:  %s --window -cp %s %s\n", g_dalvikvm_path, dex, main);
 
     if (dry_run) {
         printf("[aine-run] (dry-run: not executing)\n");
         return 0;
     }
 
-    /* Step 4: posix_spawn dalvikvm */
+    /* Step 4: posix_spawn dalvikvm --window */
     char lib_env[1024];
     snprintf(lib_env, sizeof(lib_env), "AINE_LIB_DIR=%s",
              libs[0] ? libs : "/tmp/aine");
 
-    /* Build child argv */
-    char *child_argv[5];
+    /* Build child argv: dalvikvm --window -cp <dex> <MainClass> */
+    char *child_argv[6];
     child_argv[0] = g_dalvikvm_path;
-    child_argv[1] = "-cp";
-    child_argv[2] = (char *)dex;
+    child_argv[1] = "--window";
+    child_argv[2] = "-cp";
+    child_argv[3] = (char *)dex;
     static char main_buf[256];
     strncpy(main_buf, main, sizeof(main_buf) - 1);
-    child_argv[3] = main_buf;
-    child_argv[4] = NULL;
+    child_argv[4] = main_buf;
+    child_argv[5] = NULL;
 
     /* Build child environment: prepend AINE_LIB_DIR */
     extern char **environ;

@@ -18,5 +18,8 @@ if(AINE_PLATFORM_MACOS)
     target_compile_options(aine-run PRIVATE
         -Wall -Wextra -Wno-unused-parameter
     )
+    set_target_properties(aine-run PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
     install(TARGETS aine-run DESTINATION bin)
 endif()

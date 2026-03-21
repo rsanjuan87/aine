@@ -17,6 +17,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>    /* clock_gettime, nanosleep */
+#include <stdint.h>
 
 // ── Register ────────────────────────────────────────────────────────────
 typedef enum { REG_PRIM, REG_OBJ } RegKind;
@@ -874,6 +876,121 @@ void interp_run_runnable(AineInterp *interp, AineObj *runnable)
     exec_method(interp, runnable->class_desc, "run", &r, 1, 0, NULL);
 }
 
+/* ── Activity finish flag ─────────────────────────────────────────────────
+ * On macOS, window.m provides aine_activity_should_finish() (reads an atomic).
+ * On other platforms (or headless builds), default to always-running: finish
+ * is triggered only by the time-based deadline below. */
+#ifdef __APPLE__
+extern int  aine_activity_should_finish(void);
+extern void aine_activity_request_finish(void);
+#else
+static int  aine_activity_should_finish(void)  { return 0; }
+static void aine_activity_request_finish(void) {}
+#endif
+
+static int64_t interp_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/* Set by aine_window_run() when the --window flag is active.
+ * Controls whether activity_event_loop uses interactive mode. */
+static int g_window_mode = 0;
+void interp_set_window_mode(int enabled) { g_window_mode = enabled; }
+
+/* ── Input dispatch (macOS only) ──────────────────────────────────────────
+ * Include inputflinger header for AineInputEvent; compile-guarded on Apple. */
+#ifdef __APPLE__
+#include "inputflinger.h"
+
+static int dispatch_input_events(AineInterp *interp,
+                                  const char *class_descriptor,
+                                  Reg *this_reg)
+{
+    int count = 0;
+    AineInputEvent ev;
+    while (aine_input_poll(&ev)) {
+        count++;
+        if (ev.kind == AINE_INPUT_KEY) {
+            /* Build: KeyEvent(int action, int keyCode) */
+            AineObj *ke = calloc(1, sizeof(AineObj));
+            ke->type = OBJ_USERCLASS;
+            ke->class_desc = "Landroid/view/KeyEvent;";
+            heap_iput_prim(ke, "action",  (int64_t)ev.key.action);
+            heap_iput_prim(ke, "keycode", (int64_t)ev.key.keycode);
+            heap_iput_prim(ke, "meta",    (int64_t)ev.key.meta_state);
+
+            /* Build call args: [this, keycode_int, keyevent_obj] */
+            Reg args[3];
+            args[0] = *this_reg;
+            reg_set_prim(&args[1], (int64_t)ev.key.keycode);
+            reg_set_obj (&args[2], ke);
+
+            if (ev.key.action == AKEY_ACTION_DOWN)
+                exec_method(interp, class_descriptor, "onKeyDown", args, 3, 0, NULL);
+            else
+                exec_method(interp, class_descriptor, "onKeyUp",   args, 3, 0, NULL);
+
+        } else if (ev.kind == AINE_INPUT_MOTION) {
+            /* Build MotionEvent object */
+            AineObj *me = calloc(1, sizeof(AineObj));
+            me->type = OBJ_USERCLASS;
+            me->class_desc = "Landroid/view/MotionEvent;";
+            heap_iput_prim(me, "action", (int64_t)ev.motion.action);
+            /* Store x/y as integer bits of float for simplicity */
+            union { float f; int64_t i; } cx, cy;
+            cx.f = ev.motion.x; cy.f = ev.motion.y;
+            heap_iput_prim(me, "x", cx.i);
+            heap_iput_prim(me, "y", cy.i);
+
+            Reg args[2];
+            args[0] = *this_reg;
+            reg_set_obj(&args[1], me);
+            exec_method(interp, class_descriptor, "onTouchEvent", args, 2, 0, NULL);
+        }
+    }
+    return count;
+}
+#endif /* __APPLE__ */
+
+/* ── Interactive Activity event loop ─────────────────────────────────────
+ * Interactive (--window) mode: runs 60 s cap, exits on finish() or window close.
+ * Also exits if handler queue + input have both been empty for 2 consecutive
+ * seconds (so test Activities that don't call finish() exit gracefully).
+ * Headless (no --window):  drain handler queue once, up to 10 s, then stop. */
+static void activity_event_loop(AineInterp *interp,
+                                const char *class_descriptor,
+                                Reg *this_reg)
+{
+#ifdef __APPLE__
+    if (g_window_mode) {
+        /* Interactive: 60-second safety cap; exits early on finish signal */
+        int64_t deadline_ns   = interp_now_ns() + 60LL * 1000000000LL;
+        int64_t idle_since_ns = interp_now_ns();
+
+        while (!aine_activity_should_finish() && interp_now_ns() < deadline_ns) {
+            handler_drain(interp, 50);  /* 50 ms chunk */
+            int had_input = dispatch_input_events(interp, class_descriptor, this_reg);
+
+            if (!handler_pending() && !had_input) {
+                /* Idle — check 2-second auto-exit */
+                if (interp_now_ns() - idle_since_ns > 2LL * 1000000000LL) {
+                    break;  /* Nothing to do; exit gracefully */
+                }
+                struct timespec ts = {0, 20000000L}; /* 20 ms */
+                nanosleep(&ts, NULL);
+            } else {
+                idle_since_ns = interp_now_ns(); /* reset idle clock */
+            }
+        }
+        return;
+    }
+#endif
+    /* Headless: drain once up to 10 seconds then stop */
+    handler_drain(interp, 10000);
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────
 int interp_run_main(AineInterp *interp, const char *class_descriptor) {
     int cdef_idx = dex_find_class(interp->df, class_descriptor);
@@ -902,8 +1019,8 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor) {
         exec_method(interp, class_descriptor, "onStart", &this_reg, 1, 0, NULL);
         /* onResume()V */
         exec_method(interp, class_descriptor, "onResume", &this_reg, 1, 0, NULL);
-        /* Drain Handler queue: fire any postDelayed callbacks (max 10 s) */
-        handler_drain(interp, 10000);
+        /* Interactive or drain-only event loop */
+        activity_event_loop(interp, class_descriptor, &this_reg);
         /* Lifecycle teardown */
         exec_method(interp, class_descriptor, "onPause",   &this_reg, 1, 0, NULL);
         exec_method(interp, class_descriptor, "onStop",    &this_reg, 1, 0, NULL);

@@ -14,6 +14,11 @@ void        interp_free(AineInterp *interp);
 // Returns 0 on success, non-zero on error
 int interp_run_main(AineInterp *interp, const char *class_descriptor);
 
+// Enable interactive (window) mode for the Activity event loop.
+// Must be called BEFORE interp_run_main() when in --window mode.
+// When disabled (default), Activity mode uses a simple handler drain (10 s cap).
+void interp_set_window_mode(int enabled);
+
 // Invoke a Runnable's run() method using the class stored in runnable->class_desc.
 // No-op if runnable is NULL or has no class_desc.
 void interp_run_runnable(AineInterp *interp, AineObj *runnable);

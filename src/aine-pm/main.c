@@ -25,17 +25,17 @@ static void usage(void) {
 }
 
 // Find dalvikvm binary relative to our own executable path
+#ifdef __APPLE__
+#  include <mach-o/dyld.h>
+#endif
 static int find_dalvikvm(char *out, size_t outsz) {
-    // Try same directory as aine-pm
     char self[1024] = {0};
-    ssize_t len = readlink("/proc/self/exe", self, sizeof(self)-1);
-    if (len <= 0) {
-        // macOS: use _NSGetExecutablePath or just try hardcoded paths
-        // Fall back to PATH lookup
-        snprintf(out, outsz, "dalvikvm");
-        return 0;
-    }
-    // Replace binary name
+#ifdef __APPLE__
+    uint32_t sz = (uint32_t)sizeof(self);
+    if (_NSGetExecutablePath(self, &sz) != 0) self[0] = '\0';
+#else
+    readlink("/proc/self/exe", self, sizeof(self)-1);
+#endif
     char *slash = strrchr(self, '/');
     if (slash) {
         *slash = '\0';
@@ -75,11 +75,11 @@ static int cmd_run(const char *package_name) {
     printf("---\n");
 
     // Build argv for execvp
-    // dalvikvm -cp <dex> <MainClass>
-    // Note: Activity classes need android.app.Activity support (F6).
+    // dalvikvm --window -cp <dex> <MainClass>
     // For now we pass the class name and let dalvikvm attempt execution.
     char *argv[] = {
         dalvikvm,
+        (char *)"--window",
         (char *)"-cp",
         info.dex_path,
         info.manifest.main_activity,

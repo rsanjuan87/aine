@@ -24,12 +24,38 @@
 #include <dispatch/dispatch.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "interp.h"
 #include "window.h"
 
+/* Input monitors — compiled into dalvikvm on macOS */
+#include "keyboard.h"
+#include "pointer.h"
+
 /* ── Window state ───────────────────────────────────────────────────────── */
 static NSWindow * __strong g_window = nil;
+
+/* ── Quit flag: set by window delegate or Activity.finish() ─────────────── */
+static atomic_int g_should_quit = ATOMIC_VAR_INIT(0);
+
+/* Exposed to interp.c so the Activity event loop can check it */
+int aine_activity_should_finish(void) {
+    return atomic_load(&g_should_quit);
+}
+void aine_activity_request_finish(void) {
+    atomic_store(&g_should_quit, 1);
+}
+
+/* ── NSWindowDelegate — detect close button ─────────────────────────────── */
+@interface AineWindowDelegate : NSObject <NSWindowDelegate>
+@end
+@implementation AineWindowDelegate
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    aine_activity_request_finish();
+    return YES;
+}
+@end
 
 /* ─────────────────────────────────────────────────────────────────────────
  * create_window — best-effort NSWindow + CAMetalLayer.
@@ -83,6 +109,14 @@ static int create_window(const char *title)
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
+        /* Delegate: detect close-button → signal quit */
+        AineWindowDelegate *delegate = [[AineWindowDelegate alloc] init];
+        [g_window setDelegate:delegate];
+
+        /* Start input monitors now that we have a real window */
+        aine_input_keyboard_start();
+        aine_input_pointer_start((__bridge void *)g_window);
+
         fprintf(stderr, "[aine-window] window \"%s\" created (800x600)\n",
                 title ? title : "AINE");
         return 1;
@@ -114,8 +148,17 @@ int aine_window_run(AineInterp *interp, const char *class_descriptor)
         title[len] = '\0';
     }
 
+    /* Reset quit flag for this session */
+    atomic_store(&g_should_quit, 0);
+
     /* Best-effort window creation */
-    create_window(title);
+    int has_window = create_window(title);
+
+    /* Enable interactive event loop only when a real window exists.
+     * In headless / CI environments (no Metal), fall back to drain mode. */
+    if (has_window) {
+        interp_set_window_mode(1);
+    }
 
     /* Run interpreter on a background dispatch queue */
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -141,6 +184,13 @@ int aine_window_run(AineInterp *interp, const char *class_descriptor)
         [g_window close];
         g_window = nil;
     }
+
+    /* Stop input monitors */
+    aine_input_keyboard_stop();
+    aine_input_pointer_stop();
+
+    /* Reset mode flags */
+    interp_set_window_mode(0);
 
     return interp_result;
 }

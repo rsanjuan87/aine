@@ -12,7 +12,7 @@ Android APIs → macOS APIs. `aine-shim.dylib` se inyecta via `DYLD_INSERT_LIBRA
 - `⬜` — pendiente
 - `❌` — bloqueado (requiere paso previo)
 
-**Estado actual:** 20/20 CTests pasan — 21 marzo 2026
+**Estado actual:** 21/21 CTests pasan — 21 marzo 2026
 
 ---
 
@@ -394,8 +394,8 @@ en CI headless; listos para conectar a la ventana en F8.
 ### T7.1 — Input stubs ✅
 - ✅ `src/aine-hals/input/` — stub headless-safe para teclado/ratón
 - ✅ CTest `test-input` verifica inicialización sin crash
-- ⬜ (F8) `NSEvent` keyDown/keyUp → Android `KeyEvent` (KEYCODE_*)
-- ⬜ (F8) `NSEvent` mouse* → Android `MotionEvent` ACTION_DOWN/MOVE/UP
+- ✅ (F8/T8.2) `NSEvent` keyDown/keyUp → Android `KeyEvent` (KEYCODE_*) — `keyboard.mm`
+- ✅ (F8/T8.2) `NSEvent` mouse* → Android `MotionEvent` ACTION_DOWN/MOVE/UP — `pointer.mm`
 
 ### T7.2 — Audio HAL ✅
 - ✅ `src/aine-hals/audio/` — stub headless-safe (CoreAudio placeholder)
@@ -442,24 +442,37 @@ con render loop, VSYNC, e input básico.
 - ✅ `src/aine-dalvik/CMakeLists.txt` — `window.m` con `-fobjc-arc` + AppKit/Metal/QuartzCore
 - ✅ CTest #20 `g5-window-activity` — verifica lifecycle completo en modo ventana
 
-### T8.2 — Input NSEvent → Android events ⬜
-- ⬜ `src/aine-hals/input/keyboard.mm` — keyDown/keyUp → `android.view.KeyEvent`
-- ⬜ `src/aine-hals/input/pointer.mm` — mouseDown/Moved/Up → `android.view.MotionEvent`
-- ⬜ Tabla de traducción: macOS virtual keys → Android `KEYCODE_*`
+### T8.2 — Input NSEvent → Android events ✅
+- ✅ `src/aine-hals/input/keyboard.mm` — `NSEvent` keyDown/keyUp → `aine_input_key_event()` en ring buffer; tabla macOS virtual keys → Android `KEYCODE_*`
+- ✅ `src/aine-hals/input/pointer.mm` — `NSEvent` mouseDown/Moved/Up → `aine_input_motion_event()` con coordenadas en puntos de vista
+- ✅ Wrapped en `extern "C"` para evitar name-mangling Objective-C++
+- ✅ `src/aine-dalvik/window.m` — inicia/detiene keyboard+pointer monitors en `create_window()` / cleanup
+- ✅ `src/aine-dalvik/window.h` — `aine_activity_should_finish()` + `aine_activity_request_finish()`; NSWindowDelegate cierra ventana limpiamente
+- ✅ `src/aine-dalvik/interp.c` — `dispatch_input_events()` consume ring buffer → crea `KeyEvent`/`MotionEvent` JNI y llama `onKeyDown`/`onKeyUp`/`onTouchEvent` en Activity
+- ✅ `src/aine-dalvik/interp.c` — `activity_event_loop()`: modo ventana (60s cap, idle-exit 2s); modo headless (drain 10s anterior)
+- ✅ `src/aine-dalvik/jni.c` — stubs `android.view.KeyEvent` + `android.view.MotionEvent` (getAction/getKeyCode/getX/getY etc.); `Activity.finish()` → `aine_activity_request_finish()`
 
-### T8.3 — aine-run CLI ⬜
-- ⬜ `src/aine-run/main.c` — `aine-run [--debug] <apk>`
-  - ⬜ Llama `aine-pm install` si el paquete no está registrado
-  - ⬜ Lanza `dalvikvm --window -cp <dex> <MainClass>` via `posix_spawn`
-  - ⬜ Gestiona proceso hijo, recoge logs, gestiona SIGTERM
+### T8.3 — aine-run CLI ✅
+- ✅ `src/aine-launcher/aine-run.c` — `aine-run [--dry-run] <apk>`
+  - ✅ Llama `pm_install(apk)` + `pm_query(package)` para obtener DEX + MainClass
+  - ✅ Lanza `dalvikvm --window -cp <dex> <MainClass>` via `posix_spawn`
+  - ✅ Busca `dalvikvm` via `AINE_DALVIKVM` env var, luego `dirname(argv[0])`
+  - ✅ Espera al hijo con `waitpid`; propaga exit code
+  - ✅ `--dry-run` imprime el comando sin ejecutarlo
+- ✅ `src/aine-pm/main.c` `cmd_run()` — pasa `--window` flag a execvp
+- ✅ `src/aine-pm/main.c` `find_dalvikvm()` — usa `_NSGetExecutablePath` en macOS (en vez de `/proc/self/exe`)
 
 **Cómo verificar F8:**
 ```bash
-# CTest #20: g5-window-activity
+# CTest #20: g5-window-activity (T8.1)
 ctest --test-dir build -R g5-window-activity --output-on-failure
 # Esperado: "g5-window: onCreate" ... "g5-window: done" + Passed
 
-# Manual (requiere display):
+# CTest #14: activity-lifecycle — aine-run end-to-end (T8.3)
+ctest --test-dir build -R activity-lifecycle --output-on-failure
+# Esperado: "onDestroy" en salida + Passed (~5s)
+
+# T8.1 manual (requiere display):
 ./build/dalvikvm --window -cp test-apps/G5WindowTest/classes.dex G5WindowActivity
 # Esperado:
 # [aine-window] window "G5WindowActivity" created (800x600)
@@ -468,8 +481,27 @@ ctest --test-dir build -R g5-window-activity --output-on-failure
 # g5-window: onDestroy
 # g5-window: done
 
-./build/dalvikvm --window -cp test-apps/M3TestApp/classes.dex com.aine.testapp.MainActivity
-# Esperado: ventana "AINE" abre, lifecycle M3TestApp completo
+# T8.2 manual — input NSEvent (requiere display):
+./build/dalvikvm --window -cp test-apps/M3TestApp/M3TestApp.apk com.aine.testapp.MainActivity
+# Abre ventana; mover ratón → onTouchEvent dispatched; teclas → onKeyDown/onKeyUp
+# Cerrar ventana → onDestroy limpio
+
+# T8.3 manual — aine-run CLI:
+./build/aine-run --dry-run test-apps/M3TestApp/M3TestApp.apk
+# Esperado: imprime comando "dalvikvm --window -cp ... com.aine.testapp.MainActivity"
+
+./build/aine-run test-apps/M3TestApp/M3TestApp.apk
+# Esperado:
+# [aine-run] Launched (pid NNNN)
+# [aine-window] window "MainActivity" created (800x600)
+# [I/AINE-M3] onCreate — AINE M3 funcional
+# [I/AINE-M3] onDestroy — ciclo de vida completo
+# [aine-run] Exited with code 0
+
+# aine-pm run (T8.3 alternativo):
+./build/aine-pm install test-apps/M3TestApp/M3TestApp.apk
+./build/aine-pm run com.aine.testapp
+# Lanza dalvikvm --window directamente via execvp
 ```
 
 ---
@@ -479,17 +511,44 @@ ctest --test-dir build -R g5-window-activity --output-on-failure
 **Objetivo:** Una app Android FOSS real (calculadora, reloj, notes) ejecuta
 completamente — UI visible, botones responden, ciclo de vida limpio.
 
-### T9.1 — Framework stubs de UI ⬜
-- ⬜ `android.view.View` / `ViewGroup` — layout stub mínimo (width/height/parent)
-- ⬜ `android.widget.TextView/Button/EditText` — stubs sin render 2D real
-- ⬜ `android.graphics.Canvas` → Metal 2D renderer mínimo (texto + rectángulos)
+### T9.1 — Framework stubs de UI ✅ (G6 — stubs sin crash)
+- ✅ `android.view.View` — `<init>(Context)`, `setContentView`, `setBackground*`, `setVisibility`, `setOnClickListener`, `invalidate`
+- ✅ `android.view.ViewGroup` — `addView`, `removeView`, `getChildCount`/`getChildAt`
+- ✅ `android.widget.TextView` — `setText`/`getText`/`setTextSize`/`setTextColor`/`setHint`
+- ✅ `android.widget.Button` — hereda TextView, `setEnabled`/`isEnabled`
+- ✅ `android.widget.EditText` — `setInputType`, `getText`→`toString`
+- ✅ `android.widget.ImageView` — `setImageResource`/`setBitmap`/`setScaleType`
+- ✅ `android.widget.LinearLayout`/`RelativeLayout`/`FrameLayout`/`ConstraintLayout` — constructores
+- ✅ `android.widget.Toast` — `makeText` + `show` → `fprintf(stderr)`
+- ✅ `android.widget.RecyclerView`/`ListView` — `setAdapter`/`notifyDataSetChanged`
+- ✅ `android.graphics.Canvas` — `drawText`/`drawRect`/`drawCircle`/`drawBitmap` stubs
+- ✅ `android.graphics.Paint` — `setColor`/`setStrokeWidth`/`setTextSize`/`setStyle`
+- ✅ `android.graphics.Bitmap` — `createBitmap`/`getWidth`/`getHeight`/`getPixel`/`setPixel`
+- ✅ `android.graphics.drawable.Drawable`/`ColorDrawable` stubs
+- ✅ `Activity.setContentView(View)` — registra vista raíz sin crash
+- ✅ CTest #21 `g6-app-stubs` — verifica que G6RealActivity llama setContentView/addView/setText sin crash
 
 ### T9.2 — App de prueba: calculadora AOSP ⬜
 - ⬜ Compilar `packages/apps/ExactCalculator` de AOSP (o FOSS equivalent)
 - ⬜ `./build/aine-run ExactCalculator.apk` → ventana con UI visible
 - ⬜ Clicks en botones producen resultado correcto
 
-**Cómo verificar F9 (cuando implementado):**
+**Cómo verificar F9 T9.1 (G6 stubs):**
+```bash
+# CTest #21: g6-app-stubs
+ctest --test-dir build -R g6-app-stubs --output-on-failure
+# Esperado:
+# [g6] setContentView ok
+# [g6] addView ok
+# [g6] setText ok
+# g6-app-stubs ... Passed
+
+# Manual:
+./build/dalvikvm --window -cp test-apps/G6RealActivity/classes.dex G6RealActivity
+# Cycle completo sin crash; stubs de View/Canvas/Paint no generan excepciones
+```
+
+**Cómo verificar F9 T9.2 (cuando implementado):**
 ```bash
 ./build/aine-run ExactCalculator.apk
 # Esperado: ventana "Calculator" con UI completa, 2+2=4 funciona
@@ -497,30 +556,31 @@ completamente — UI visible, botones responden, ciclo de vida limpio.
 
 ---
 
-## Tabla de CTests (19/19 activos)
+## Tabla de CTests (21/21 activos)
 
 | # | Nombre CTest | Fase | Qué verifica |
 |---|-------------|------|--------------|
-| 1 | `dalvik-hello` | F1 | HelloWorld DEX — bytecodes básicos |
-| 2 | `dalvik-format` | F1 | DEX parser: string/method tables |
-| 3 | `dalvik-arith` | F1 | Opcodes aritméticos 0x90–0xe2 |
-| 4 | `shim-epoll` | F2 | epoll→kqueue traducción |
-| 5 | `shim-futex` | F2 | futex→pthread |
+| 1 | `binder-protocol` | F3 | Binder protocol parser |
+| 2 | `shim-epoll` | F2 | epoll→kqueue traducción |
+| 3 | `shim-futex` | F2 | futex→pthread |
+| 4 | `shim-eventfd` | F2 | eventfd→pipe semántica Linux |
+| 5 | `shim-prctl` | F2 | prctl PR_SET_NAME → pthread_setname |
 | 6 | `binder-roundtrip` | F3 | Binder IPC round-trip |
 | 7 | `pm-install` | F4 | APK install/query pipeline |
 | 8 | `loader-path-map` | F5 | dlopen path mapping + native stub |
-| 9 | `test-egl-headless` | F6 | EGL 1.4 Metal headless (IOSurface) |
-| 10 | `test-vulkan` | F7 | MoltenVK detección dinámica |
-| 11 | `m3-lifecycle` | F1 | Activity lifecycle + system props |
-| 12 | `test-audio` | F7 | Audio HAL init headless |
-| 13 | `test-camera` | F7 | Cámara HAL init headless |
-| 14 | `test-clipboard` | F7 | NSPasteboard round-trip |
-| 15 | `test-input` | F7 | Input HAL init headless |
+| 9 | `dalvik-f6-opcodes` | F1 | DEX parser + opcodes F6 suite |
+| 10 | `surface-egl-headless` | F6 | EGL 1.4 Metal headless (IOSurface) |
+| 11 | `input-hal` | F7 | Input HAL init headless |
+| 12 | `audio-hal` | F7 | Audio HAL init headless |
+| 13 | `launcher-run` | F8/T8.3 | `aine-run --list` exits 0 |
+| 14 | `activity-lifecycle` | F8/T8.3 | `aine-run M3TestApp.apk` → onDestroy |
+| 15 | `hals-f12` | F7 | Vulkan/MoltenVK detect + Camera + Clipboard |
 | 16 | `handler-loop` | F1/G1 | Handler.postDelayed + iget/iput reales |
 | 17 | `g2-stdlib` | F1/G2 | ArrayList/HashMap/Math/String.format |
 | 18 | `g3-framework` | F1/G3 | try/catch + Thread.sleep + Iterator + split/replace |
 | 19 | `g4-stdlib2` | F1/G4 | Arrays.asList + Collections + Integer.MAX_VALUE |
 | 20 | `g5-window-activity` | F8/G5 | --window mode: NSApp + NSWindow + Activity lifecycle |
+| 21 | `g6-app-stubs` | F9/G6 | View/widget/Canvas/Paint stubs — setContentView sin crash |
 
 ---
 
@@ -536,10 +596,10 @@ completamente — UI visible, botones responden, ciclo de vida limpio.
 | F5 | Loader de libs nativas (.so ARM64) | ✅ | #8 |
 | F6 | Gráficos: EGL 1.4/Metal + CAMetalLayer + VSYNC | ✅ | #9 |
 | F7 | HALs: Audio/Cámara/Vulkan/Clipboard/Input | ✅ | #10,#12,#13,#14,#15 |
-| F8 | NSWindow display + Activity visual (--window, T8.1) | ✅/⬜ | #20 (T8.1 ✅; T8.2/T8.3 ⬜) |
-| F9 | Primera app Android visual real | ⬜ | — |
+| F8 | NSWindow display + Activity visual (T8.1/T8.2/T8.3) | ✅ | #20, #13, #14 |
+| F9 | Framework UI stubs (G6) + primera app visual real | ✅/⬜ | #21 (T9.1 ✅; T9.2 ⬜) |
 
-**Estado actual: 20/20 CTests pasan. Siguiente: F8 T8.2 (NSEvent input) + F9 UI stubs.**
+**Estado actual: 21/21 CTests pasan. Siguiente: F9 T9.2 (primera app visual real — calculadora FOSS).**
 
 ---
 
@@ -554,7 +614,11 @@ completamente — UI visible, botones responden, ciclo de vida limpio.
 | (wip) | G4: Arrays.asList, ArrayList(Collection), jni_sget_prim, fix `<init>` ordering, CTest #19 | 19/19 |
 | (wip) | ROADMAP: actualizado a 19/19 CTests, F6/F7 reales, G1–G4 documentados | 19/19 |
 | (wip) | G5: --window flag, window.m NSApp+NSRunLoop pump, G5WindowTest, CTest #20 | 20/20 |
+| `579b6fd3` | G6: View/widget/graphics stubs, G6RealActivity, CTest #21 | 21/21 |
+| (wip) | T8.2: keyboard.mm/pointer.mm extern"C", dispatch_input_events, activity_event_loop, KeyEvent/MotionEvent JNI | 21/21 |
+| (wip) | T8.3: aine-run --window flag, aine-pm find_dalvikvm macOS fix, RUNTIME_OUTPUT_DIRECTORY | 21/21 |
+| (wip) | ROADMAP: actualizado a 21/21 CTests, T8.2/T8.3/F9-T9.1 marcados ✅ | 21/21 |
 
 ---
 
-*Actualizado: 21 marzo 2026 — 20/20 CTests — próximo: F8 T8.2 NSEvent input + F9 UI stubs*
+*Actualizado: 21 marzo 2026 — 21/21 CTests — próximo: F9 T9.2 primera app visual real (calculadora FOSS)*

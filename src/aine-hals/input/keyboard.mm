@@ -23,7 +23,7 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-void aine_input_keyboard_start(void)
+extern "C" void aine_input_keyboard_start(void)
 {
     if (s_keyboard_monitor) return;
 
@@ -64,7 +64,7 @@ void aine_input_keyboard_start(void)
         }];
 }
 
-void aine_input_keyboard_stop(void)
+extern "C" void aine_input_keyboard_stop(void)
 {
     if (s_keyboard_monitor) {
         [NSEvent removeMonitor:s_keyboard_monitor];

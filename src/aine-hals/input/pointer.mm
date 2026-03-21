@@ -31,7 +31,7 @@ static void flip_coords(NSWindow *win, NSPoint pt, float *out_x, float *out_y)
     *out_y = (float)(win.contentView.bounds.size.height - pt.y);
 }
 
-void aine_input_pointer_start(void *ns_window)
+extern "C" void aine_input_pointer_start(void *ns_window)
 {
     if (s_pointer_monitor) return;
     s_tracked_window = (__bridge NSWindow *)ns_window;
@@ -90,7 +90,7 @@ void aine_input_pointer_start(void *ns_window)
         }];
 }
 
-void aine_input_pointer_stop(void)
+extern "C" void aine_input_pointer_stop(void)
 {
     if (s_pointer_monitor) {
         [NSEvent removeMonitor:s_pointer_monitor];

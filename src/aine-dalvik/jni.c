@@ -1290,8 +1290,12 @@ JniResult jni_dispatch(const char *class_desc,
     if (strstr(class_desc, "android/app/Activity") ||
         strstr(class_desc, "android/app/Application")) {
         if (!strcmp(method_name, "finish")) {
-            /* Signal the Activity lifecycle to end — set a runnable flag */
+            /* Signal the interactive event loop to exit */
             fprintf(stderr, "[aine-dalvik] Activity.finish() called\n");
+#ifdef __APPLE__
+            extern void aine_activity_request_finish(void);
+            aine_activity_request_finish();
+#endif
             return res;
         }
         if (!strcmp(method_name, "getWindow")) {
@@ -1341,6 +1345,70 @@ JniResult jni_dispatch(const char *class_desc,
             !strcmp(method_name, "supportInvalidateOptionsMenu")) {
             return res;
         }
+    }
+
+    // ── android.view.KeyEvent ─────────────────────────────────────────────
+    if (strstr(class_desc, "android/view/KeyEvent")) {
+        if (!strcmp(method_name, "<init>") && nargs >= 2) {
+            /* KeyEvent(int action, int keyCode) */
+            if (this_obj) {
+                this_obj->class_desc = "Landroid/view/KeyEvent;";
+                heap_iput_prim(this_obj, "action",  arg_prim(args[0]));
+                heap_iput_prim(this_obj, "keycode", arg_prim(args[1]));
+            }
+            return res;
+        }
+        if (!strcmp(method_name, "getAction")) {
+            res.is_void = 0;
+            res.prim = this_obj ? heap_iget_prim(this_obj, "action") : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "getKeyCode")) {
+            res.is_void = 0;
+            res.prim = this_obj ? heap_iget_prim(this_obj, "keycode") : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "getMetaState")) {
+            res.is_void = 0;
+            res.prim = this_obj ? heap_iget_prim(this_obj, "meta") : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "getRepeatCount") || !strcmp(method_name, "getFlags") ||
+            !strcmp(method_name, "getScanCode") ||
+            !strcmp(method_name, "isCtrlPressed") || !strcmp(method_name, "isShiftPressed") ||
+            !strcmp(method_name, "isAltPressed") || !strcmp(method_name, "isCanceled")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        return res;
+    }
+
+    // ── android.view.MotionEvent ──────────────────────────────────────────
+    if (strstr(class_desc, "android/view/MotionEvent")) {
+        if (!strcmp(method_name, "<init>")) {
+            if (this_obj) this_obj->class_desc = "Landroid/view/MotionEvent;";
+            return res;
+        }
+        if (!strcmp(method_name, "getAction") || !strcmp(method_name, "getActionMasked")) {
+            res.is_void = 0;
+            res.prim = this_obj ? heap_iget_prim(this_obj, "action") : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "getX") || !strcmp(method_name, "getRawX")) {
+            union { int64_t i; float f; } v;
+            v.i = this_obj ? heap_iget_prim(this_obj, "x") : 0;
+            res.is_void = 0; res.prim = (int64_t)(v.f); return res;
+        }
+        if (!strcmp(method_name, "getY") || !strcmp(method_name, "getRawY")) {
+            union { int64_t i; float f; } v;
+            v.i = this_obj ? heap_iget_prim(this_obj, "y") : 0;
+            res.is_void = 0; res.prim = (int64_t)(v.f); return res;
+        }
+        if (!strcmp(method_name, "getPointerCount")) { res.is_void = 0; res.prim = 1; return res; }
+        if (!strcmp(method_name, "getPointerId"))    { res.is_void = 0; res.prim = 0; return res; }
+        if (!strcmp(method_name, "getPressure"))     { res.is_void = 0; res.prim = 1; return res; }
+        if (!strcmp(method_name, "getSize"))         { res.is_void = 0; res.prim = 0; return res; }
+        if (!strcmp(method_name, "obtain") || !strcmp(method_name, "recycle")) { return res; }
+        return res;
     }
 
     // ── android.view.Window ──────────────────────────────────────────────

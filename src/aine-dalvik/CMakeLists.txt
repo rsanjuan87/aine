@@ -14,14 +14,21 @@ set(DALVIK_SOURCES
 )
 
 # G5: --window mode — NSApplication + NSWindow + CAMetalLayer bootstrap
+# G6/T8.2: keyboard.mm + pointer.mm — NSEvent → Android event bridge
 # Only compiled on macOS (Objective-C + AppKit)
 if(APPLE)
     list(APPEND DALVIK_SOURCES window.m)
+    list(APPEND DALVIK_SOURCES
+        "${CMAKE_SOURCE_DIR}/src/aine-hals/input/keyboard.mm"
+        "${CMAKE_SOURCE_DIR}/src/aine-hals/input/pointer.mm"
+    )
 endif()
 
 add_executable(dalvikvm ${DALVIK_SOURCES})
 
-target_include_directories(dalvikvm PRIVATE .)
+target_include_directories(dalvikvm PRIVATE .
+    "${CMAKE_SOURCE_DIR}/src/aine-hals/input"
+)
 
 # C11 required for designated initialisers and _Atomic (not used yet but anticipated)
 set_target_properties(dalvikvm PROPERTIES C_STANDARD 11)
@@ -33,11 +40,18 @@ target_compile_options(dalvikvm PRIVATE
 )
 
 # window.m is Objective-C and needs ARC + AppKit frameworks
+# keyboard.mm / pointer.mm are Objective-C++ with ARC
 if(APPLE)
     set_source_files_properties(window.m PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
+    set_source_files_properties(
+        "${CMAKE_SOURCE_DIR}/src/aine-hals/input/keyboard.mm"
+        "${CMAKE_SOURCE_DIR}/src/aine-hals/input/pointer.mm"
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
     target_link_libraries(dalvikvm PRIVATE
+        aine-input-core
         "-framework Foundation"
         "-framework AppKit"
         "-framework Metal"
