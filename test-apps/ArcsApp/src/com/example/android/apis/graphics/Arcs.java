@@ -40,7 +40,7 @@ public class Arcs extends GraphicsActivity {
                 System.err.println("[arcs] done");
                 finish();
             }
-        }, 10000);
+        }, 15000);
     }
 
     private static class SampleView extends View {
