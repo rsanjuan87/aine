@@ -1,5 +1,6 @@
 // aine-dalvik/jni.c — Native method bridges for core Android/Java APIs
 #include "jni.h"
+#include "handler.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -315,10 +316,25 @@ JniResult jni_dispatch(const char *class_desc,
 
     // ── android.os.Handler / Looper ──────────────────────────────────────
     if (strstr(class_desc, "android/os/Handler")) {
-        if (strcmp(method_name, "<init>") == 0 || strcmp(method_name, "postDelayed") == 0 ||
-            strcmp(method_name, "post") == 0 || strcmp(method_name, "removeCallbacks") == 0) {
-            return res;  // is_void = 1, no-op
+        if (strcmp(method_name, "<init>") == 0) { res.is_void = 1; return res; }
+        if (strcmp(method_name, "postDelayed") == 0 && nargs >= 2) {
+            /* args[0] = Runnable, args[1] = delay (prim, boxed as string) */
+            AineObj *runnable = args[0];
+            int64_t delay_ms = 0;
+            if (args[1]) {
+                if (args[1]->type == OBJ_STRING && args[1]->str)
+                    delay_ms = atoll(args[1]->str);
+                else
+                    delay_ms = args[1]->arr_prim[0];
+            }
+            handler_post_delayed(runnable, delay_ms);
+            res.is_void = 0; res.prim = 1; return res; /* returns boolean true */
         }
+        if (strcmp(method_name, "post") == 0 && nargs >= 1) {
+            handler_post_delayed(args[0], 0);
+            res.is_void = 0; res.prim = 1; return res;
+        }
+        if (strcmp(method_name, "removeCallbacks") == 0) { return res; }
     }
     if (strstr(class_desc, "android/os/Looper")) {
         if (strcmp(method_name, "getMainLooper") == 0 || strcmp(method_name, "myLooper") == 0) {

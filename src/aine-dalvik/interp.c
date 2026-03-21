@@ -12,6 +12,7 @@
 #include "dex.h"
 #include "heap.h"
 #include "jni.h"
+#include "handler.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -257,6 +258,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
                     int cd = dex_find_class(interp->df, type);
                     obj = (cd >= 0) ? heap_userclass(cd)
                                     : (AineObj *)calloc(1, sizeof(AineObj));
+                    if (obj) obj->class_desc = type;  /* for Runnable dispatch */
                 }
             } else { obj = calloc(1, sizeof(AineObj)); }
             reg_set_obj(&regs[vx], obj);
@@ -306,40 +308,82 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             break;
         }
 
-        // ── 0x52..0x58 iget variants  22c — stub: return 0/null ─────────
+        // ── 0x52..0x58 iget variants  22c ─────────────────────────────
+        // vA = vB.<field@CCCC>
         case 0x52: case 0x53: case 0x54: case 0x55:
         case 0x56: case 0x57: case 0x58: {
             int vA = (insn >> 8) & 0xf;
-            memset(&regs[vA], 0, sizeof(Reg));
+            int vB = (insn >> 12) & 0xf;
+            uint16_t fidx = insns[pc + 1];
+            const char *fname = dex_field_name(interp->df, fidx);
+            AineObj *obj = reg_obj(&regs[vB]);
+            if (op == 0x54) {  /* iget-object only (0x58=iget-short is prim) */
+                AineObj *val = obj ? heap_iget_obj(obj, fname) : NULL;
+                reg_set_obj(&regs[vA], val);
+            } else {
+                int64_t val = obj ? heap_iget_prim(obj, fname) : 0;
+                reg_set_prim(&regs[vA], val);
+            }
             pc += 2; break;
         }
-        // ── 0x59..0x5f iput variants  22c — stub: ignore ─────────────────
+        // ── 0x59..0x5f iput variants  22c ────────────────────────────────
+        // vB.<field@CCCC> = vA
         case 0x59: case 0x5a: case 0x5b: case 0x5c:
-        case 0x5d: case 0x5e: case 0x5f:
+        case 0x5d: case 0x5e: case 0x5f: {
+            int vA = (insn >> 8) & 0xf;
+            int vB = (insn >> 12) & 0xf;
+            uint16_t fidx = insns[pc + 1];
+            const char *fname = dex_field_name(interp->df, fidx);
+            AineObj *obj = reg_obj(&regs[vB]);
+            if (op == 0x5b) {  /* iput-object only (0x5f=iput-short is prim) */
+                if (obj) heap_iput_obj(obj, fname, reg_obj(&regs[vA]));
+            } else {
+                if (obj) heap_iput_prim(obj, fname, reg_prim(&regs[vA]));
+            }
             pc += 2; break;
+        }
 
         // ── 0x60..0x6d sget/sput variants ────────────────────────────────
-        // 0x60..0x65: sget (object version via JNI, others return 0)
+        // 0x60..0x65: sget-* 21c: vAA, field@BBBB
         case 0x60: case 0x61: case 0x62: case 0x63:
         case 0x64: case 0x65: {
             int vx = byte_hi(insn);
             uint16_t fidx = insns[pc + 1];
             const char *cls   = dex_field_class(interp->df, fidx);
             const char *fname = dex_field_name(interp->df, fidx);
-            AineObj *obj = jni_sget_object(cls, fname);
-            reg_set_obj(&regs[vx], obj);
+            if (op == 0x62) {  /* sget-object */
+                AineObj *stored = heap_sget_obj(cls, fname);
+                if (!stored) stored = jni_sget_object(cls, fname);
+                reg_set_obj(&regs[vx], stored);
+            } else {
+                reg_set_prim(&regs[vx], heap_sget_prim(cls, fname));
+            }
             pc += 2;
             break;
         }
-        // 0x66..0x67 sget-short/sget-byte stubs
+        // 0x66..0x67 sget-short/sget-byte
         case 0x66: case 0x67: {
             int vx = (insn >> 8) & 0xff;
-            reg_set_prim(&regs[vx], 0); pc += 2; break;
-        }
-        // 0x68..0x6d sput variants — stub: ignore
-        case 0x68: case 0x69: case 0x6a: case 0x6b:
-        case 0x6c: case 0x6d:
+            uint16_t fidx2 = insns[pc + 1];
+            const char *cls2   = dex_field_class(interp->df, fidx2);
+            const char *fname2 = dex_field_name(interp->df, fidx2);
+            reg_set_prim(&regs[vx], heap_sget_prim(cls2, fname2));
             pc += 2; break;
+        }
+        // 0x68..0x6d sput-* 21c: field@BBBB, vAA
+        case 0x68: case 0x69: case 0x6a: case 0x6b:
+        case 0x6c: case 0x6d: {
+            int vx3 = byte_hi(insn);
+            uint16_t fidx3 = insns[pc + 1];
+            const char *cls3   = dex_field_class(interp->df, fidx3);
+            const char *fname3 = dex_field_name(interp->df, fidx3);
+            if (op == 0x6a) {  /* sput-object */
+                heap_sput_obj(cls3, fname3, reg_obj(&regs[vx3]));
+            } else {
+                heap_sput_prim(cls3, fname3, reg_prim(&regs[vx3]));
+            }
+            pc += 2; break;
+        }
         case 0x28: {  // goto +AA  10t
             int8_t off = (int8_t)(uint8_t)(insn >> 8);
             pc = (uint32_t)((int32_t)pc + (int32_t)off); break;
@@ -741,10 +785,6 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             pc += 2; break;
         }
 
-        // ── 0x52..0x58 iget real impl (lookup via DEX field table) ────
-        // Already handled above as stubs — real impl:
-        // for now just leave as zero-return stubs
-
         // ── Unhandled ─────────────────────────────────────────────────
         default:
             fprintf(stderr, "[aine-dalvik] unhandled opcode 0x%02x at pc=%u\n", op, pc);
@@ -753,6 +793,16 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         continue;
         next_insn: ;  /* target for goto (sparse-switch) */
     }
+}
+
+// ── interp_run_runnable ───────────────────────────────────────────────────
+void interp_run_runnable(AineInterp *interp, AineObj *runnable)
+{
+    if (!runnable || !runnable->class_desc) return;
+    Reg r;
+    r.kind = REG_OBJ;
+    r.obj  = runnable;
+    exec_method(interp, runnable->class_desc, "run", &r, 1, 0, NULL);
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────
@@ -783,6 +833,8 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor) {
         exec_method(interp, class_descriptor, "onStart", &this_reg, 1, 0, NULL);
         /* onResume()V */
         exec_method(interp, class_descriptor, "onResume", &this_reg, 1, 0, NULL);
+        /* Drain Handler queue: fire any postDelayed callbacks (max 10 s) */
+        handler_drain(interp, 10000);
         /* Lifecycle teardown */
         exec_method(interp, class_descriptor, "onPause",   &this_reg, 1, 0, NULL);
         exec_method(interp, class_descriptor, "onStop",    &this_reg, 1, 0, NULL);

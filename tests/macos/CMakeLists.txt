@@ -91,3 +91,13 @@ set_tests_properties(hals-f12 PROPERTIES
     PASS_REGULAR_EXPRESSION "RESULT: [0-9]+ ok, 0 failed"
 )
 
+# G1: Handler.postDelayed fires inside Activity lifecycle (handler-loop)
+add_test(NAME handler-loop
+    COMMAND dalvikvm -cp "${CMAKE_SOURCE_DIR}/test-apps/HandlerTest/classes.dex" HandlerTest
+)
+set_tests_properties(handler-loop PROPERTIES
+    TIMEOUT 10
+    LABELS  "handler;g1;macos"
+    PASS_REGULAR_EXPRESSION "handler-fired"
+)
+

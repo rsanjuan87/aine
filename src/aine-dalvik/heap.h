@@ -13,6 +13,16 @@ typedef enum {
     OBJ_ARRAY        = 5,   // primitive / object array
 } ObjType;
 
+/* Instance field slot — stored inline in AineObj for user-defined classes */
+typedef struct AineFieldSlot {
+    char    name[64];    /* field name (e.g. "f$0", "mValue") */
+    int     is_obj;      /* 1 = obj, 0 = primitive */
+    union {
+        int64_t         prim;
+        struct AineObj *obj;
+    };
+} AineFieldSlot;
+
 typedef struct AineObj {
     ObjType type;
     int     arr_len;         // OBJ_ARRAY: element count
@@ -29,6 +39,12 @@ typedef struct AineObj {
             int class_def_idx;   // OBJ_USERCLASS: index into DexFile class_defs
         } uc;
     };
+    /* Instance fields — used by OBJ_USERCLASS and generic instances */
+    AineFieldSlot *fields;
+    int            n_fields;
+    int            fields_cap;
+    /* Runtime type info — set for OBJ_USERCLASS by new-instance */
+    const char    *class_desc;   /* e.g. "Lcom/example/Foo;" (not owned) */
 } AineObj;
 
 // Allocate a new string object (copies s)
@@ -43,3 +59,15 @@ AineObj *heap_sb_tostring(AineObj *sb);
 AineObj *heap_userclass(int class_def_idx);
 // Allocate an array of given length (zero-initialised)
 AineObj *heap_array_new(int len);
+
+/* Instance field access (for iget/iput opcodes) */
+void     heap_iput_prim(AineObj *obj, const char *name, int64_t value);
+void     heap_iput_obj (AineObj *obj, const char *name, AineObj *value);
+int64_t  heap_iget_prim(const AineObj *obj, const char *name);
+AineObj *heap_iget_obj (const AineObj *obj, const char *name);
+
+/* Static field store (sget/sput opcodes) — global per-process table */
+void     heap_sput_prim(const char *cls, const char *field, int64_t value);
+void     heap_sput_obj (const char *cls, const char *field, AineObj *value);
+int64_t  heap_sget_prim(const char *cls, const char *field);
+AineObj *heap_sget_obj (const char *cls, const char *field);
