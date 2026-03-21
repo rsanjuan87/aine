@@ -144,3 +144,15 @@ set_tests_properties(g5-window-activity PROPERTIES
     PASS_REGULAR_EXPRESSION "g5-window: onCreate.*g5-window: onResume.*g5-window: onDestroy.*g5-window: done"
 )
 
+# G6: View/widget/graphics stubs — Activity with TextView, Button, Toast, Color, LinearLayout
+add_test(NAME g6-app-stubs
+    COMMAND dalvikvm --window
+            -cp "${CMAKE_SOURCE_DIR}/test-apps/G6RealActivity/classes.dex"
+            G6RealActivity
+)
+set_tests_properties(g6-app-stubs PROPERTIES
+    TIMEOUT 20
+    LABELS  "stubs;g6;macos"
+    PASS_REGULAR_EXPRESSION "g6-textview:Hello AINE.*g6-toast-shown.*g6-color:ok.*g6-layout:ok.*g6-onDestroy.*g6-done"
+)
+

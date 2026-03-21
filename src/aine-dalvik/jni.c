@@ -11,6 +11,17 @@
 #include <sys/stat.h>
 #include <errno.h>
 
+// ── Safe primitive arg reader ───────────────────────────────────────────
+// Primitive args from the interpreter are boxed as heap_string objects.
+// Real array elements come as OBJ_ARRAY with arr_prim set.
+// This helper handles both cases safely.
+static inline int64_t arg_prim(const AineObj *a) {
+    if (!a) return 0;
+    if (a->arr_prim) return a->arr_prim[0];  /* actual int64 array */
+    if (a->str)      return atoll(a->str);    /* boxed primitive from interp */
+    return 0;
+}
+
 // ── Static field singletons ──────────────────────────────────────────────
 static AineObj g_system_out = { .type = OBJ_PRINTSTREAM };
 static AineObj g_system_err = { .type = OBJ_PRINTSTREAM };
@@ -243,7 +254,7 @@ JniResult jni_dispatch(const char *class_desc,
         }
         if (strcmp(method_name, "exit") == 0) {
             int code = 0;
-            if (nargs >= 1 && args[0]) code = (int)args[0]->arr_prim[0];
+            if (nargs >= 1 && args[0]) code = (int)arg_prim(args[0]);
             exit(code);
         }
         if (strcmp(method_name, "currentTimeMillis") == 0) {
@@ -387,7 +398,7 @@ JniResult jni_dispatch(const char *class_desc,
         }
         if (strcmp(method_name, "valueOf") == 0 && nargs >= 1) {
             if (args[0] && args[0]->type == OBJ_STRING) { res.is_void = 0; res.obj = args[0]; return res; }
-            char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)(args[0] ? args[0]->arr_prim[0] : 0));
+            char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)arg_prim(args[0]));
             res.is_void = 0; res.obj = heap_string(buf); return res;
         }
         if (strcmp(method_name, "format") == 0 && nargs >= 1 && args[0] && args[0]->str) {
@@ -464,12 +475,12 @@ JniResult jni_dispatch(const char *class_desc,
             res.is_void = 0; res.obj = heap_string(t); free(t); return res;
         }
         if (strcmp(method_name, "charAt") == 0 && nargs >= 1) {
-            int idx_ch = (int)(args[0] ? args[0]->arr_prim[0] : 0);
+            int idx_ch = (int)arg_prim(args[0]);
             res.is_void = 0; res.prim = (idx_ch >= 0 && idx_ch < (int)strlen(str_val)) ? (uint8_t)str_val[idx_ch] : 0;
             return res;
         }
         if (strcmp(method_name, "substring") == 0 && nargs >= 1) {
-            int from = (int)(args[0] ? args[0]->arr_prim[0] : 0);
+            int from = (int)arg_prim(args[0]);
             const char *sub = (from >= 0 && from < (int)strlen(str_val)) ? str_val + from : "";
             res.is_void = 0; res.obj = heap_string(sub); return res;
         }
@@ -523,7 +534,7 @@ JniResult jni_dispatch(const char *class_desc,
             if (args[0]) {
                 if (args[0]->type == OBJ_STRING || args[0]->type == OBJ_STRINGBUILDER)
                     s = args[0]->str;
-                else { snprintf(buf, sizeof(buf), "%lld", (long long)args[0]->arr_prim); s = buf; }
+                else { snprintf(buf, sizeof(buf), "%lld", (long long)arg_prim(args[0])); s = buf; }
             } else s = "null";
             if (this_obj) heap_sb_append(this_obj, s);
             res.is_void = 0; res.obj = this_obj; return res;
@@ -1275,7 +1286,512 @@ JniResult jni_dispatch(const char *class_desc,
         }
     }
 
-    // ── java.lang.Exception / RuntimeException / Error ───────────────────
+    // ── Activity extras: finish, getWindow, findViewById, LayoutInflater ──
+    if (strstr(class_desc, "android/app/Activity") ||
+        strstr(class_desc, "android/app/Application")) {
+        if (!strcmp(method_name, "finish")) {
+            /* Signal the Activity lifecycle to end — set a runnable flag */
+            fprintf(stderr, "[aine-dalvik] Activity.finish() called\n");
+            return res;
+        }
+        if (!strcmp(method_name, "getWindow")) {
+            static AineObj g_window_stub = { .type = OBJ_NULL };
+            g_window_stub.class_desc = "Landroid/view/Window;";
+            res.is_void = 0; res.obj = &g_window_stub; return res;
+        }
+        if (!strcmp(method_name, "getWindowManager")) {
+            static AineObj g_wm_stub = { .type = OBJ_NULL };
+            g_wm_stub.class_desc = "Landroid/view/WindowManager;";
+            res.is_void = 0; res.obj = &g_wm_stub; return res;
+        }
+        if (!strcmp(method_name, "getLayoutInflater") ||
+            !strcmp(method_name, "getMenuInflater")) {
+            static AineObj g_inflater = { .type = OBJ_NULL };
+            g_inflater.class_desc = "Landroid/view/LayoutInflater;";
+            res.is_void = 0; res.obj = &g_inflater; return res;
+        }
+        if (!strcmp(method_name, "findViewById") ||
+            !strcmp(method_name, "requireViewById")) {
+            /* Return a generic View stub — class_desc set to type of caller */
+            AineObj *view = calloc(1, sizeof(AineObj));
+            view->type = OBJ_USERCLASS;
+            view->class_desc = "Landroid/view/View;";
+            if (nargs >= 1 && args[0])
+                heap_iput_obj(view, "__resid__", args[0]);
+            res.is_void = 0; res.obj = view; return res;
+        }
+        if (!strcmp(method_name, "getActionBar") ||
+            !strcmp(method_name, "getSupportActionBar")) {
+            res.is_void = 0; res.obj = NULL; return res;
+        }
+        if (!strcmp(method_name, "getIntent")) {
+            static AineObj g_intent = { .type = OBJ_HASHMAP };
+            g_intent.class_desc = "Landroid/content/Intent;";
+            res.is_void = 0; res.obj = &g_intent; return res;
+        }
+        if (!strcmp(method_name, "getApplication") ||
+            !strcmp(method_name, "getApplicationContext")) {
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "setTitle") ||
+            !strcmp(method_name, "setRequestedOrientation") ||
+            !strcmp(method_name, "setVolumeControlStream") ||
+            !strcmp(method_name, "overridePendingTransition") ||
+            !strcmp(method_name, "invalidateOptionsMenu") ||
+            !strcmp(method_name, "supportInvalidateOptionsMenu")) {
+            return res;
+        }
+    }
+
+    // ── android.view.Window ──────────────────────────────────────────────
+    if (strstr(class_desc, "android/view/Window")) {
+        if (!strcmp(method_name, "setFlags") ||
+            !strcmp(method_name, "addFlags") ||
+            !strcmp(method_name, "clearFlags") ||
+            !strcmp(method_name, "setSoftInputMode") ||
+            !strcmp(method_name, "requestFeature") ||
+            !strcmp(method_name, "setStatusBarColor") ||
+            !strcmp(method_name, "setNavigationBarColor")) {
+            return res;
+        }
+        if (!strcmp(method_name, "getDecorView") ||
+            !strcmp(method_name, "getContext")) {
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        return res;
+    }
+
+    // ── android.view.View / ViewGroup / FrameLayout / LinearLayout etc ───
+    if (strstr(class_desc, "android/view/View") ||
+        strstr(class_desc, "android/view/ViewGroup") ||
+        strstr(class_desc, "android/view/SurfaceView") ||
+        strstr(class_desc, "android/widget/FrameLayout") ||
+        strstr(class_desc, "android/widget/LinearLayout") ||
+        strstr(class_desc, "android/widget/RelativeLayout") ||
+        strstr(class_desc, "android/widget/ScrollView") ||
+        strstr(class_desc, "android/widget/ListView") ||
+        strstr(class_desc, "android/widget/RecyclerView") ||
+        strstr(class_desc, "android/support/") ||
+        strstr(class_desc, "androidx/")) {
+        if (!strcmp(method_name, "<init>")) {
+            if (this_obj) this_obj->class_desc = class_desc;
+            return res;
+        }
+        if (!strcmp(method_name, "setVisibility") ||
+            !strcmp(method_name, "setEnabled") ||
+            !strcmp(method_name, "setClickable") ||
+            !strcmp(method_name, "setFocusable") ||
+            !strcmp(method_name, "setFocusableInTouchMode") ||
+            !strcmp(method_name, "setSelected") ||
+            !strcmp(method_name, "setActivated") ||
+            !strcmp(method_name, "setAlpha") ||
+            !strcmp(method_name, "setScaleX") || !strcmp(method_name, "setScaleY") ||
+            !strcmp(method_name, "setTranslationX") || !strcmp(method_name, "setTranslationY") ||
+            !strcmp(method_name, "setPadding") || !strcmp(method_name, "setMargins") ||
+            !strcmp(method_name, "setBackgroundColor") ||
+            !strcmp(method_name, "setBackgroundResource") ||
+            !strcmp(method_name, "setBackground") ||
+            !strcmp(method_name, "setLayoutParams") ||
+            !strcmp(method_name, "requestLayout") ||
+            !strcmp(method_name, "invalidate") ||
+            !strcmp(method_name, "bringToFront") ||
+            !strcmp(method_name, "addView") ||
+            !strcmp(method_name, "removeView") ||
+            !strcmp(method_name, "removeAllViews") ||
+            !strcmp(method_name, "measure") ||
+            !strcmp(method_name, "layout") ||
+            !strcmp(method_name, "draw")) {
+            return res;
+        }
+        if (!strcmp(method_name, "setOnClickListener") && nargs >= 1) {
+            if (this_obj) heap_iput_obj(this_obj, "onClick", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "setOnLongClickListener") ||
+            !strcmp(method_name, "setOnTouchListener") ||
+            !strcmp(method_name, "setOnKeyListener") ||
+            !strcmp(method_name, "setOnFocusChangeListener") ||
+            !strcmp(method_name, "setOnCheckedChangeListener") ||
+            !strcmp(method_name, "setOnItemClickListener") ||
+            !strcmp(method_name, "setOnItemSelectedListener")) {
+            if (this_obj && nargs >= 1) heap_iput_obj(this_obj, "listener", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "getContext")) {
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "getId")) {
+            AineObj *rid = this_obj ? heap_iget_obj(this_obj, "__resid__") : NULL;
+            res.is_void = 0; res.prim = rid && rid->str ? atoi(rid->str) : 0; return res;
+        }
+        if (!strcmp(method_name, "getTag")) {
+            res.is_void = 0; res.obj = this_obj ? heap_iget_obj(this_obj, "__tag__") : NULL; return res;
+        }
+        if (!strcmp(method_name, "setTag") && nargs >= 1) {
+            if (this_obj) heap_iput_obj(this_obj, "__tag__", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "getWidth")) { res.is_void = 0; res.prim = 800; return res; }
+        if (!strcmp(method_name, "getHeight")) { res.is_void = 0; res.prim = 600; return res; }
+        if (!strcmp(method_name, "getVisibility")) { res.is_void = 0; res.prim = 0; return res; }  /* VISIBLE */
+        if (!strcmp(method_name, "isEnabled")) { res.is_void = 0; res.prim = 1; return res; }
+        if (!strcmp(method_name, "isShown")) { res.is_void = 0; res.prim = 1; return res; }
+        if (!strcmp(method_name, "post") || !strcmp(method_name, "postDelayed")) {
+            if (nargs >= 1) handler_post_delayed(args[0], 0);
+            res.is_void = 0; res.prim = 1; return res;
+        }
+        if (!strcmp(method_name, "getChildCount")) { res.is_void = 0; res.prim = 0; return res; }
+        if (!strcmp(method_name, "getChildAt")) { res.is_void = 0; res.obj = NULL; return res; }
+        if (!strcmp(method_name, "findViewById")) {
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        /* Fallthrough: return void stub */
+        return res;
+    }
+
+    // ── android.widget.TextView / Button / EditText / CheckBox / etc ─────
+    if (strstr(class_desc, "android/widget/") ||
+        strstr(class_desc, "android/app/AlertDialog")) {
+        if (!strcmp(method_name, "<init>")) {
+            if (this_obj) this_obj->class_desc = class_desc;
+            return res;
+        }
+        if (!strcmp(method_name, "setText") && nargs >= 1) {
+            if (this_obj && args[0])
+                heap_iput_obj(this_obj, "text", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "getText") ||
+            !strcmp(method_name, "getHint") ||
+            !strcmp(method_name, "getError")) {
+            AineObj *t = this_obj ? heap_iget_obj(this_obj, "text") : NULL;
+            res.is_void = 0; res.obj = t ? t : heap_string(""); return res;
+        }
+        if (!strcmp(method_name, "append") && nargs >= 1) {
+            AineObj *old = this_obj ? heap_iget_obj(this_obj, "text") : NULL;
+            const char *os = old && old->str ? old->str : "";
+            const char *ns = args[0] && args[0]->str ? args[0]->str : "";
+            char buf[1024]; snprintf(buf, sizeof(buf), "%s%s", os, ns);
+            if (this_obj) heap_iput_obj(this_obj, "text", heap_string(buf));
+            return res;
+        }
+        if (!strcmp(method_name, "setTextColor") ||
+            !strcmp(method_name, "setTextSize") ||
+            !strcmp(method_name, "setTypeface") ||
+            !strcmp(method_name, "setHint") ||
+            !strcmp(method_name, "setHintTextColor") ||
+            !strcmp(method_name, "setInputType") ||
+            !strcmp(method_name, "setImeOptions") ||
+            !strcmp(method_name, "setGravity") ||
+            !strcmp(method_name, "setLines") ||
+            !strcmp(method_name, "setMaxLines") ||
+            !strcmp(method_name, "setSingleLine") ||
+            !strcmp(method_name, "setEllipsize") ||
+            !strcmp(method_name, "setCompoundDrawables") ||
+            !strcmp(method_name, "setCompoundDrawablePadding") ||
+            !strcmp(method_name, "setMovementMethod") ||
+            !strcmp(method_name, "setAdapter") ||
+            !strcmp(method_name, "setSelection") ||
+            !strcmp(method_name, "setEnabled") ||
+            !strcmp(method_name, "setOnClickListener") ||
+            !strcmp(method_name, "setOnCheckedChangeListener") ||
+            !strcmp(method_name, "setOnEditorActionListener") ||
+            !strcmp(method_name, "setContentDescription")) {
+            if (!strcmp(method_name, "setOnClickListener") && nargs >= 1 && this_obj)
+                heap_iput_obj(this_obj, "onClick", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "setChecked") && nargs >= 1) {
+            if (this_obj) {
+                AineObj *v = calloc(1, sizeof(AineObj));
+                v->type = OBJ_STRING; v->str = args[0] ? "true" : "false";
+                heap_iput_obj(this_obj, "checked", v);
+            }
+            return res;
+        }
+        if (!strcmp(method_name, "isChecked")) {
+            AineObj *c = this_obj ? heap_iget_obj(this_obj, "checked") : NULL;
+            res.is_void = 0; res.prim = (c && c->str && !strcmp(c->str, "true")) ? 1 : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "length")) {
+            AineObj *t = this_obj ? heap_iget_obj(this_obj, "text") : NULL;
+            res.is_void = 0; res.prim = t && t->str ? (int64_t)strlen(t->str) : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "show") || !strcmp(method_name, "dismiss") ||
+            !strcmp(method_name, "create") || !strcmp(method_name, "setPositiveButton") ||
+            !strcmp(method_name, "setNegativeButton") || !strcmp(method_name, "setMessage") ||
+            !strcmp(method_name, "setTitle") || !strcmp(method_name, "setCancelable") ||
+            !strcmp(method_name, "setView") || !strcmp(method_name, "setItems")) {
+            if (!strcmp(method_name, "show") && strstr(class_desc, "Toast")) {
+                AineObj *t = this_obj ? heap_iget_obj(this_obj, "text") : NULL;
+                fprintf(stderr, "[aine-toast] %s\n", t && t->str ? t->str : "");
+            }
+            return res;
+        }
+        /* Generic view methods (visibility, background, etc.) */
+        return res;
+    }
+
+    // ── android.widget.Toast (static makeText) ───────────────────────────
+    if (strstr(class_desc, "android/widget/Toast")) {
+        if (!strcmp(method_name, "makeText") && nargs >= 2) {
+            AineObj *toast = calloc(1, sizeof(AineObj));
+            toast->type = OBJ_USERCLASS;
+            toast->class_desc = "Landroid/widget/Toast;";
+            heap_iput_obj(toast, "text", args[1] ? args[1] : heap_string(""));
+            res.is_void = 0; res.obj = toast; return res;
+        }
+        if (!strcmp(method_name, "show")) {
+            AineObj *t = this_obj ? heap_iget_obj(this_obj, "text") : NULL;
+            fprintf(stderr, "[aine-toast] %s\n", t && t->str ? t->str : "");
+            return res;
+        }
+        if (!strcmp(method_name, "cancel") || !strcmp(method_name, "setDuration") ||
+            !strcmp(method_name, "setGravity") || !strcmp(method_name, "setView")) {
+            return res;
+        }
+        return res;
+    }
+
+    // ── android.view.LayoutInflater ──────────────────────────────────────
+    if (strstr(class_desc, "android/view/LayoutInflater") ||
+        strstr(class_desc, "android/view/MenuInflater")) {
+        if (!strcmp(method_name, "inflate") || !strcmp(method_name, "inflateMenu")) {
+            AineObj *view = calloc(1, sizeof(AineObj));
+            view->type = OBJ_USERCLASS;
+            view->class_desc = "Landroid/view/View;";
+            res.is_void = 0; res.obj = view; return res;
+        }
+        if (!strcmp(method_name, "from") || !strcmp(method_name, "<init>")) {
+            AineObj *inf = calloc(1, sizeof(AineObj));
+            inf->type = OBJ_USERCLASS;
+            inf->class_desc = "Landroid/view/LayoutInflater;";
+            res.is_void = 0; res.obj = inf; return res;
+        }
+        return res;
+    }
+
+    // ── android.graphics.* ──────────────────────────────────────────────
+    if (strstr(class_desc, "android/graphics/")) {
+        if (!strcmp(method_name, "<init>")) { return res; }
+        /* Paint */
+        if (!strcmp(method_name, "setColor") || !strcmp(method_name, "setStrokeWidth") ||
+            !strcmp(method_name, "setStyle") || !strcmp(method_name, "setAntiAlias") ||
+            !strcmp(method_name, "setTextSize") || !strcmp(method_name, "setTypeface") ||
+            !strcmp(method_name, "setAlpha") || !strcmp(method_name, "setFlags") ||
+            !strcmp(method_name, "reset") || !strcmp(method_name, "setShadowLayer")) {
+            return res;
+        }
+        if (!strcmp(method_name, "measureText") && nargs >= 1) {
+            const char *s = args[0] && args[0]->str ? args[0]->str : "";
+            res.is_void = 0; res.prim = (int64_t)(strlen(s) * 8); return res; /* 8px/char approx */
+        }
+        /* Canvas */
+        if (!strcmp(method_name, "drawText") || !strcmp(method_name, "drawRect") ||
+            !strcmp(method_name, "drawCircle") || !strcmp(method_name, "drawLine") ||
+            !strcmp(method_name, "drawBitmap") || !strcmp(method_name, "drawPath") ||
+            !strcmp(method_name, "drawArc") || !strcmp(method_name, "drawOval") ||
+            !strcmp(method_name, "drawRoundRect") || !strcmp(method_name, "clipRect") ||
+            !strcmp(method_name, "save") || !strcmp(method_name, "restore") ||
+            !strcmp(method_name, "translate") || !strcmp(method_name, "scale") ||
+            !strcmp(method_name, "rotate") || !strcmp(method_name, "concat") ||
+            !strcmp(method_name, "setMatrix") || !strcmp(method_name, "drawColor")) {
+            return res;
+        }
+        if (!strcmp(method_name, "getWidth"))  { res.is_void = 0; res.prim = 800; return res; }
+        if (!strcmp(method_name, "getHeight")) { res.is_void = 0; res.prim = 600; return res; }
+        /* Color static */
+        if (!strcmp(method_name, "rgb") && nargs >= 3) {
+            int64_t r = arg_prim(args[0]);
+            int64_t g = arg_prim(args[1]);
+            int64_t b = arg_prim(args[2]);
+            res.is_void = 0; res.prim = 0xFF000000 | (r<<16) | (g<<8) | b; return res;
+        }
+        if (!strcmp(method_name, "argb") && nargs >= 4) {
+            int64_t a = arg_prim(args[0]);
+            int64_t r = arg_prim(args[1]);
+            int64_t g = arg_prim(args[2]);
+            int64_t b = arg_prim(args[3]);
+            res.is_void = 0; res.prim = (a<<24) | (r<<16) | (g<<8) | b; return res;
+        }
+        if (!strcmp(method_name, "parseColor") && nargs >= 1) {
+            res.is_void = 0; res.prim = 0xFF000000; return res;
+        }
+        /* Bitmap */
+        if (!strcmp(method_name, "createBitmap") || !strcmp(method_name, "decodeResource") ||
+            !strcmp(method_name, "decodeFile") || !strcmp(method_name, "decodeStream") ||
+            !strcmp(method_name, "createScaledBitmap")) {
+            AineObj *bmp = calloc(1, sizeof(AineObj));
+            bmp->type = OBJ_USERCLASS;
+            bmp->class_desc = "Landroid/graphics/Bitmap;";
+            res.is_void = 0; res.obj = bmp; return res;
+        }
+        if (!strcmp(method_name, "recycle") || !strcmp(method_name, "isRecycled") ||
+            !strcmp(method_name, "compress")) {
+            return res;
+        }
+        /* Path */
+        if (!strcmp(method_name, "moveTo") || !strcmp(method_name, "lineTo") ||
+            !strcmp(method_name, "quadTo") || !strcmp(method_name, "cubicTo") ||
+            !strcmp(method_name, "arcTo") || !strcmp(method_name, "close") ||
+            !strcmp(method_name, "reset") || !strcmp(method_name, "addRect") ||
+            !strcmp(method_name, "addCircle") || !strcmp(method_name, "addArc") ||
+            !strcmp(method_name, "setFillType")) {
+            return res;
+        }
+        /* RectF/Rect */
+        if (!strcmp(method_name, "set") || !strcmp(method_name, "offset") ||
+            !strcmp(method_name, "inset") || !strcmp(method_name, "union") ||
+            !strcmp(method_name, "intersect") || !strcmp(method_name, "contains") ||
+            !strcmp(method_name, "isEmpty")) {
+            return res;
+        }
+        return res;
+    }
+
+    // ── android.content.res.Resources (improved) ─────────────────────────
+    if (strstr(class_desc, "android/content/res/Resources") ||
+        strstr(class_desc, "android/content/res/AssetManager")) {
+        if (!strcmp(method_name, "getString") || !strcmp(method_name, "getText") ||
+            !strcmp(method_name, "getQuantityString")) {
+            res.is_void = 0; res.obj = heap_string(""); return res;
+        }
+        if (!strcmp(method_name, "getInteger") || !strcmp(method_name, "getDimensionPixelSize") ||
+            !strcmp(method_name, "getDimensionPixelOffset") || !strcmp(method_name, "getColor")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        if (!strcmp(method_name, "getDimension")) {
+            res.is_void = 0; res.prim = 0; return res; /* float as int bits */
+        }
+        if (!strcmp(method_name, "getDrawable") || !strcmp(method_name, "getDrawableForDensity")) {
+            res.is_void = 0; res.obj = NULL; return res;
+        }
+        if (!strcmp(method_name, "getStringArray") || !strcmp(method_name, "getTextArray")) {
+            AineObj *arr = calloc(1, sizeof(AineObj));
+            arr->type = OBJ_ARRAY; arr->arr_len = 0;
+            res.is_void = 0; res.obj = arr; return res;
+        }
+        if (!strcmp(method_name, "open") || !strcmp(method_name, "openFd")) {
+            res.is_void = 0; res.obj = NULL; return res;
+        }
+        return res;
+    }
+
+    // ── android.content.res.Configuration ───────────────────────────────
+    if (strstr(class_desc, "android/content/res/Configuration")) {
+        return res; /* all no-op */
+    }
+
+    // ── android.os.Build / Build.VERSION ────────────────────────────────
+    if (strstr(class_desc, "android/os/Build")) {
+        if (!strcmp(method_name, "SDK_INT") || !strcmp(method_name, "getSDK_INT")) {
+            res.is_void = 0; res.prim = 35; return res;
+        }
+        return res;
+    }
+
+    // ── android.util.DisplayMetrics / TypedValue ──────────────────────────
+    if (strstr(class_desc, "android/util/DisplayMetrics") ||
+        strstr(class_desc, "android/util/TypedValue")) {
+        if (!strcmp(method_name, "<init>")) return res;
+        if (!strcmp(method_name, "getDensity") || !strcmp(method_name, "density")) {
+            res.is_void = 0; res.prim = 2; return res; /* xhdpi */
+        }
+        return res;
+    }
+
+    // ── android.app.NotificationManager / NotificationChannel ───────────
+    if (strstr(class_desc, "android/app/Notification")) {
+        return res; /* all no-op stubs */
+    }
+
+    // ── java.util.concurrent.* ───────────────────────────────────────────
+    if (strstr(class_desc, "java/util/concurrent/") ||
+        strstr(class_desc, "java/util/concurrent/atomic/")) {
+        if (!strcmp(method_name, "<init>")) return res;
+        if (!strcmp(method_name, "get")) {
+            AineObj *v = this_obj ? heap_iget_obj(this_obj, "__val__") : NULL;
+            res.is_void = 0; res.obj = v; return res;
+        }
+        if (!strcmp(method_name, "set") && nargs >= 1) {
+            if (this_obj) heap_iput_obj(this_obj, "__val__", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "getAndIncrement") ||
+            !strcmp(method_name, "incrementAndGet") ||
+            !strcmp(method_name, "decrementAndGet")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        if (!strcmp(method_name, "submit") || !strcmp(method_name, "execute")) {
+            if (nargs >= 1) handler_post_delayed(args[0], 0);
+            return res;
+        }
+        if (!strcmp(method_name, "shutdown") || !strcmp(method_name, "shutdownNow")) {
+            return res;
+        }
+        return res;
+    }
+
+    // ── java.util.regex.* ────────────────────────────────────────────────
+    if (strstr(class_desc, "java/util/regex/")) {
+        if (!strcmp(method_name, "compile") && nargs >= 1) {
+            AineObj *pat = calloc(1, sizeof(AineObj));
+            pat->type = OBJ_USERCLASS;
+            pat->class_desc = "Ljava/util/regex/Pattern;";
+            heap_iput_obj(pat, "pattern", args[0] ? args[0] : heap_string(""));
+            res.is_void = 0; res.obj = pat; return res;
+        }
+        if (!strcmp(method_name, "matcher") && nargs >= 1) {
+            AineObj *m = calloc(1, sizeof(AineObj));
+            m->type = OBJ_USERCLASS;
+            m->class_desc = "Ljava/util/regex/Matcher;";
+            heap_iput_obj(m, "input", args[0] ? args[0] : heap_string(""));
+            res.is_void = 0; res.obj = m; return res;
+        }
+        if (!strcmp(method_name, "matches") || !strcmp(method_name, "find")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        if (!strcmp(method_name, "group")) {
+            res.is_void = 0; res.obj = heap_string(""); return res;
+        }
+        if (!strcmp(method_name, "replaceAll") && nargs >= 1) {
+            AineObj *in = this_obj ? heap_iget_obj(this_obj, "input") : NULL;
+            res.is_void = 0; res.obj = in ? in : heap_string(""); return res;
+        }
+        return res;
+    }
+
+    // ── java.util.Scanner ────────────────────────────────────────────────
+    if (strstr(class_desc, "java/util/Scanner")) {
+        if (!strcmp(method_name, "<init>")) return res;
+        if (!strcmp(method_name, "nextLine") || !strcmp(method_name, "next")) {
+            res.is_void = 0; res.obj = heap_string(""); return res;
+        }
+        if (!strcmp(method_name, "hasNextLine") || !strcmp(method_name, "hasNext")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        if (!strcmp(method_name, "close")) return res;
+        return res;
+    }
+
+    // ── java.io.* streams ────────────────────────────────────────────────
+    if (strstr(class_desc, "java/io/") &&
+        (strstr(class_desc, "Stream") || strstr(class_desc, "Reader") ||
+         strstr(class_desc, "Writer") || strstr(class_desc, "Buffer"))) {
+        if (!strcmp(method_name, "<init>")) return res;
+        if (!strcmp(method_name, "close") || !strcmp(method_name, "flush")) return res;
+        if (!strcmp(method_name, "write") || !strcmp(method_name, "print") ||
+            !strcmp(method_name, "println")) {
+            if (nargs >= 1 && args[0] && args[0]->str)
+                fprintf(stdout, "%s", args[0]->str);
+            return res;
+        }
+        if (!strcmp(method_name, "read")) { res.is_void = 0; res.prim = -1; return res; }
+        if (!strcmp(method_name, "readLine")) { res.is_void = 0; res.obj = NULL; return res; }
+        return res;
+    }
     if (strstr(class_desc, "java/lang/") &&
         (strstr(class_desc, "Exception") || strstr(class_desc, "Error") ||
          strstr(class_desc, "Throwable"))) {
