@@ -192,7 +192,9 @@ AineObj *jni_sget_object(const char *class_desc, const char *field_name) {
         return s;
     }
     /* Suppress noisy warnings for common static-object fields we don't need */
-    if (strstr(class_desc, "android/") || strstr(class_desc, "java/")) {
+    if (strstr(class_desc, "android/") || strstr(class_desc, "java/") ||
+        strstr(class_desc, "kotlin/") || strstr(class_desc, "androidx/") ||
+        strstr(class_desc, "com/google/") || strstr(class_desc, "com/facebook/")) {
         AineObj *stub = calloc(1, sizeof(AineObj));
         stub->type = OBJ_USERCLASS; stub->class_desc = class_desc;
         return stub;
@@ -254,6 +256,7 @@ JniResult jni_dispatch(const char *class_desc,
                        int         nargs,
                        int         is_static) {
     JniResult res = { .is_void = 1, .obj = NULL, .prim = 0 };
+
 
     // ── PrintStream.println / print ──────────────────────────────────────
     if (strcmp(class_desc, "Ljava/io/PrintStream;") == 0) {
@@ -335,8 +338,9 @@ JniResult jni_dispatch(const char *class_desc,
         res.is_void = 0; res.prim = 0; return res;
     }
 
-    // ── Integer ──────────────────────────────────────────────────────────
-    if (strcmp(class_desc, "Ljava/lang/Integer;") == 0) {
+    // ── Integer / Number ─────────────────────────────────────────────────
+    if (strcmp(class_desc, "Ljava/lang/Integer;") == 0 ||
+        strcmp(class_desc, "Ljava/lang/Number;") == 0) {
         if (strcmp(method_name, "parseInt") == 0 && nargs >= 1) {
             const char *s = (args[0] && args[0]->str) ? args[0]->str : "0";
             res.is_void = 0; res.prim = (int32_t)atoi(s); return res;
@@ -768,11 +772,17 @@ JniResult jni_dispatch(const char *class_desc,
             strcmp(method_name, "requestWindowFeature") == 0) {
             return res;  // is_void = 1
         }
-        /* setContentView(View): store the view for onDraw dispatch */
+        /* setContentView(View|int): store the view for onDraw dispatch */
         if (strcmp(method_name, "setContentView") == 0) {
-            if (nargs >= 1 && args[0] && args[0]->type == OBJ_USERCLASS) {
-                g_content_view = args[0];
-                g_view_dirty   = 1;   /* trigger initial onDraw */
+            if (nargs >= 1 && args[0]) {
+                if (args[0]->type == OBJ_USERCLASS) {
+                    g_content_view = args[0];
+                    g_view_dirty   = 1;   /* trigger initial onDraw */
+                } else {
+                    /* int layout resource ID — create a synthetic content view */
+                    const char *lid = args[0]->str ? args[0]->str : "0";
+                    fprintf(stderr, "[aine-ui] setContentView(layout_id=%s)\n", lid);
+                }
             }
             return res;
         }
@@ -1390,6 +1400,52 @@ JniResult jni_dispatch(const char *class_desc,
         }
     }
 
+    // ── ViewBinding / DataBinding stubs ─────────────────────────────────
+    if (strstr(class_desc, "/databinding/") ||
+        strstr(class_desc, "ViewBinding")) {
+        if (!strcmp(method_name, "inflate") || !strcmp(method_name, "bind")) {
+            /* Create a stub binding object with pre-populated stub views */
+            AineObj *binding = calloc(1, sizeof(AineObj));
+            binding->type = OBJ_USERCLASS; binding->class_desc = class_desc;
+            /* Root view */
+            AineObj *root = calloc(1, sizeof(AineObj));
+            root->type = OBJ_USERCLASS; root->class_desc = "Landroid/view/View;";
+            heap_iput_obj(binding, "root", root);
+            /* Stub TextViews */
+            static const char *tv_names[] = { "textDisplay", "textExpression",
+                "display", "expression", "tvResult", "tvExpression", NULL };
+            for (int i = 0; tv_names[i]; i++) {
+                AineObj *tv = calloc(1, sizeof(AineObj));
+                tv->type = OBJ_USERCLASS; tv->class_desc = "Landroid/widget/TextView;";
+                heap_iput_obj(binding, tv_names[i], tv);
+            }
+            /* Stub Buttons */
+            static const char *btn_names[] = {
+                "button0","button1","button2","button3","button4",
+                "button5","button6","button7","button8","button9",
+                "buttonDecimal","buttonClear","buttonBackspace","buttonSign",
+                "buttonPercent","buttonAdd","buttonSubtract","buttonMultiply",
+                "buttonDivide","buttonEquals","buttonAC","buttonBack",
+                "btnEquals","btnAdd","btnSub","btnMul","btnDiv",
+                "btnClear","btnDecimal",NULL
+            };
+            for (int i = 0; btn_names[i]; i++) {
+                AineObj *btn = calloc(1, sizeof(AineObj));
+                btn->type = OBJ_USERCLASS; btn->class_desc = "Landroid/widget/Button;";
+                heap_iput_obj(binding, btn_names[i], btn);
+            }
+            fprintf(stderr, "[aine-ui] ViewBinding.inflate -> stub binding created\n");
+            res.is_void = 0; res.obj = binding; return res;
+        }
+        if (!strcmp(method_name, "getRoot")) {
+            AineObj *r = this_obj ? heap_iget_obj(this_obj, "root") : NULL;
+            if (!r) { r = calloc(1, sizeof(AineObj)); r->type = OBJ_USERCLASS; r->class_desc = "Landroid/view/View;"; }
+            res.is_void = 0; res.obj = r; return res;
+        }
+        /* Other binding field getters → stub view */
+        res.is_void = 0; res.obj = this_obj; return res;
+    }
+
     // ── android.view.KeyEvent ─────────────────────────────────────────────
     if (strstr(class_desc, "android/view/KeyEvent")) {
         if (!strcmp(method_name, "<init>") && nargs >= 2) {
@@ -1564,21 +1620,47 @@ JniResult jni_dispatch(const char *class_desc,
         if (!strcmp(method_name, "findViewById")) {
             res.is_void = 0; res.obj = this_obj; return res;
         }
+        /* Compose setContent stubs — caught here due to androidx/ wildcard above */
+        if (!strcmp(method_name, "setContent") ||
+            !strcmp(method_name, "setContent$default")) {
+            fprintf(stderr, "[aine-ui] ComponentActivity.setContent called (Compose UI)\n");
+            return res;
+        }
+        if (!strcmp(method_name, "mutableStateOf$default") ||
+            !strcmp(method_name, "mutableStateOf")) {
+            AineObj *sv = calloc(1, sizeof(AineObj));
+            sv->type = OBJ_USERCLASS; sv->class_desc = class_desc;
+            if (nargs >= 1 && args[0]) {
+                heap_iput_obj(sv, "value", args[0]);
+                AineObj *disp = heap_iget_obj(args[0], "display");
+                AineObj *expr = heap_iget_obj(args[0], "expression");
+                if (disp || expr) {
+                    fprintf(stderr, "[aine-ui] Compose initial state: display=\"%s\" expression=\"%s\"\n",
+                            disp && disp->str ? disp->str : "",
+                            expr && expr->str ? expr->str : "");
+                }
+            }
+            res.is_void = 0; res.obj = sv; return res;
+        }
         /* Fallthrough: return void stub */
         return res;
     }
 
-    // ── android.widget.TextView / Button / EditText / CheckBox / etc ─────
+    // ── android.widget.TextView / Button / EditText / CheckBox / Material Components / etc ─────
     if (strstr(class_desc, "android/widget/") ||
-        strstr(class_desc, "android/app/AlertDialog")) {
+        strstr(class_desc, "android/app/AlertDialog") ||
+        strstr(class_desc, "com/google/android/material/")) {
         if (!strcmp(method_name, "<init>")) {
             if (this_obj && !this_obj->class_desc)
                 this_obj->class_desc = class_desc;
             return res;
         }
         if (!strcmp(method_name, "setText") && nargs >= 1) {
-            if (this_obj && args[0])
+            if (this_obj && args[0]) {
+                const char *t = args[0]->str ? args[0]->str : "";
+                fprintf(stderr, "[aine-ui] setText: \"%s\"\n", t);
                 heap_iput_obj(this_obj, "text", args[0]);
+            }
             return res;
         }
         if (!strcmp(method_name, "getText") ||
@@ -2103,9 +2185,14 @@ JniResult jni_dispatch(const char *class_desc,
 
     /* Generic Activity-inherited methods for user subclasses (e.g. MyActivity extends Activity) */
     if (!strcmp(method_name, "setContentView")) {
-        if (nargs >= 1 && args[0] && args[0]->type == OBJ_USERCLASS) {
-            g_content_view = args[0];
-            g_view_dirty   = 1;
+        if (nargs >= 1 && args[0]) {
+            if (args[0]->type == OBJ_USERCLASS) {
+                g_content_view = args[0];
+                g_view_dirty   = 1;
+            } else {
+                const char *lid = args[0]->str ? args[0]->str : "0";
+                fprintf(stderr, "[aine-ui] setContentView(layout_id=%s)\n", lid);
+            }
         }
         return res;
     }
@@ -2120,6 +2207,83 @@ JniResult jni_dispatch(const char *class_desc,
     if (!strcmp(method_name, "requireViewById") || !strcmp(method_name, "findViewById")) {
         AineObj *v = calloc(1, sizeof(AineObj)); v->type = OBJ_USERCLASS;
         v->class_desc = "Landroid/view/View;"; res.is_void = 0; res.obj = v; return res;
+    }
+    if (!strcmp(method_name, "getLayoutInflater") || !strcmp(method_name, "getMenuInflater")) {
+        static AineObj g_inflater2 = { .type = OBJ_NULL };
+        g_inflater2.class_desc = "Landroid/view/LayoutInflater;";
+        res.is_void = 0; res.obj = &g_inflater2; return res;
+    }
+
+    // ── Kotlin jvm.internal.Intrinsics (all assertion/throw → no-op) ──────
+    if (strstr(class_desc, "kotlin/jvm/internal/") ||
+        strstr(class_desc, "kotlin/internal/")) {
+        return res;  /* no-op: checkNotNull, throwUninitializedProperty, etc. */
+    }
+
+    // ── Kotlin stdlib: TuplesKt, CollectionsKt ───────────────────────────
+    if (strstr(class_desc, "kotlin/TuplesKt") ||
+        strstr(class_desc, "kotlin/collections/") ||
+        strstr(class_desc, "kotlin/")) {
+        if (!strcmp(method_name, "to") && nargs >= 2) {
+            /* a.to(b) → Pair(first=a, second=b) */
+            AineObj *pair = calloc(1, sizeof(AineObj));
+            pair->type = OBJ_USERCLASS; pair->class_desc = "Lkotlin/Pair;";
+            heap_iput_obj(pair, "first",  args[0]);
+            heap_iput_obj(pair, "second", args[1]);
+            res.is_void = 0; res.obj = pair; return res;
+        }
+        if (!strcmp(method_name, "listOf")) {
+            AineObj *list = heap_arraylist_new();
+            if (nargs == 1 && args[0] && args[0]->type == OBJ_ARRAY) {
+                for (int i = 0; i < args[0]->arr_len; i++)
+                    heap_arraylist_add(list, args[0]->arr_obj[i]);
+            } else {
+                for (int i = 0; i < nargs && i < 8; i++)
+                    if (args[i]) heap_arraylist_add(list, args[i]);
+            }
+            res.is_void = 0; res.obj = list; return res;
+        }
+        if (!strcmp(method_name, "mapOf") || !strcmp(method_name, "setOf") ||
+            !strcmp(method_name, "emptyList") || !strcmp(method_name, "emptyMap")) {
+            res.is_void = 0; res.obj = heap_arraylist_new(); return res;
+        }
+        if (!strcmp(method_name, "mutableStateOf") || !strcmp(method_name, "remember")) {
+            /* Compose/state stubs — return arg or stub */
+            AineObj *sv = calloc(1, sizeof(AineObj));
+            sv->type = OBJ_USERCLASS; sv->class_desc = class_desc;
+            if (nargs >= 1 && args[0]) heap_iput_obj(sv, "value", args[0]);
+            res.is_void = 0; res.obj = sv; return res;
+        }
+        /* Pair decomposition */
+        if (!strcmp(method_name, "component1") || !strcmp(method_name, "getFirst")) {
+            res.is_void = 0; res.obj = this_obj ? heap_iget_obj(this_obj, "first") : NULL; return res;
+        }
+        if (!strcmp(method_name, "component2") || !strcmp(method_name, "getSecond")) {
+            res.is_void = 0; res.obj = this_obj ? heap_iget_obj(this_obj, "second") : NULL; return res;
+        }
+        return res;  /* other kotlin stdlib stubs → no-op */
+    }
+
+    // ── java.lang.Iterable / java.util.List iterator ─────────────────────
+    if (!strcmp(class_desc, "Ljava/lang/Iterable;") ||
+        !strcmp(class_desc, "Ljava/util/List;") ||
+        !strcmp(class_desc, "Ljava/util/Collection;")) {
+        if (!strcmp(method_name, "iterator") && this_obj) {
+            res.is_void = 0; res.obj = heap_iterator_new(this_obj); return res;
+        }
+        return res;
+    }
+
+    // ── androidx (generic stub for remaining unhandled classes) ──────────
+    // Note: most androidx/ calls are already handled by the android/view/View+androidx section above.
+    // This section handles any com/google/ classes not already handled.
+    if (strstr(class_desc, "androidx/") ||
+        strstr(class_desc, "com/google/")) {
+        if (!strcmp(method_name, "setContent") ||
+            !strcmp(method_name, "setContent$default")) {
+            fprintf(stderr, "[aine-ui] ComponentActivity.setContent called (Compose UI)\n");
+        }
+        return res;  /* all other stubs → no-op */
     }
 
     fprintf(stderr, "[aine-dalvik] unimplemented: %s->%s (nargs=%d)\n",

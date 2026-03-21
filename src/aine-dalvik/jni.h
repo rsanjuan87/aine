@@ -36,3 +36,4 @@ int64_t  jni_sget_prim(const char *class_desc, const char *field_name);
 struct AineObj;
 struct AineObj *jni_get_content_view(void);
 int             jni_pop_invalidated(void);
+

@@ -100,11 +100,12 @@ void aine_canvas_draw_text(float x, float y, const char *text,
                          (__bridge CFAttributedStringRef)astr);
 
     CGContextSaveGState(g_ctx);
-    /* Flip coords for text: origin becomes bottom-left in CG space */
+    /* Set up a y-down coordinate system (origin top-left, y increases down)
+     * so that Android-style top-down y coordinates map correctly. */
     CGContextTranslateCTM(g_ctx, 0, (CGFloat)g_ch);
     CGContextScaleCTM(g_ctx, 1.0, -1.0);
-    /* y in the flipped space: distance from new origin (old top) */
-    CGContextSetTextPosition(g_ctx, (CGFloat)x, (CGFloat)(g_ch - y));
+    /* y is already in Android top-down space; pass directly. */
+    CGContextSetTextPosition(g_ctx, (CGFloat)x, (CGFloat)y);
     CTLineDraw(line, g_ctx);
     CGContextRestoreGState(g_ctx);
 

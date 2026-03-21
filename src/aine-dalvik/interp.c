@@ -323,7 +323,10 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         // ── 0x38..0x3d if-testz vAA, +BBBB  21t ─────────────────────────
         case 0x38: case 0x39: case 0x3a: case 0x3b: case 0x3c: case 0x3d: {
             int vA = (insn >> 8) & 0xff;
-            int64_t a = reg_prim(&regs[vA]);
+            /* For object registers treat non-null as 1, null as 0 */
+            int64_t a = (regs[vA].kind == REG_OBJ)
+                        ? (regs[vA].obj != NULL ? 1 : 0)
+                        : reg_prim(&regs[vA]);
             int16_t off = (int16_t)insns[pc + 1];
             int taken = 0;
             switch (op) {
@@ -1131,7 +1134,7 @@ static void activity_event_loop(AineInterp *interp,
             }
 
             if (!handler_pending() && !had_input) {
-                /* Idle — check 2-second auto-exit */
+                /* Idle — 2-second auto-exit */
                 if (interp_now_ns() - idle_since_ns > 2LL * 1000000000LL) {
                     break;  /* Nothing to do; exit gracefully */
                 }
