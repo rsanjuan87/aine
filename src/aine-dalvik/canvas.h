@@ -31,6 +31,17 @@ void aine_canvas_draw_arc(float left, float top, float right, float bottom,
 int aine_canvas_width(void);
 int aine_canvas_height(void);
 
+/* Frame batching: suppress per-call dirty marks during onDraw; mark once on end */
+void aine_canvas_begin_frame(void);
+void aine_canvas_end_frame(void);
+
+/* Stroke variants (respect Paint.Style.STROKE) */
+void aine_canvas_stroke_rect(float x, float y, float w, float h,
+                             float sw, uint32_t argb);
+void aine_canvas_stroke_arc(float left, float top, float right, float bottom,
+                            float start_deg, float sweep_deg,
+                            int use_center, float sw, uint32_t argb);
+
 /* Dirty flag: set by drawing, cleared after each blit in the run-loop */
 void aine_canvas_mark_dirty(void);
 int  aine_canvas_is_dirty(void);

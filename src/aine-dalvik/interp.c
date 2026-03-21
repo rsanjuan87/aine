@@ -13,6 +13,9 @@
 #include "heap.h"
 #include "jni.h"
 #include "handler.h"
+#ifdef __APPLE__
+#include "canvas.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1124,7 +1127,13 @@ static void activity_event_loop(AineInterp *interp,
                 Reg draw_args[2];
                 draw_args[0].kind = REG_OBJ; draw_args[0].obj = view;
                 draw_args[1].kind = REG_OBJ; draw_args[1].obj = &s_canvas;
+#ifdef __APPLE__
+                aine_canvas_begin_frame();
+#endif
                 exec_method(interp, view->class_desc, "onDraw", draw_args, 2, 0, NULL);
+#ifdef __APPLE__
+                aine_canvas_end_frame();   /* marks dirty once for the complete frame */
+#endif
                 idle_since_ns = interp_now_ns(); /* drawing resets idle clock */
                 g_draw_count++;
                 if (g_max_frames > 0 && g_draw_count >= g_max_frames) {

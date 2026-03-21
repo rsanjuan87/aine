@@ -1793,12 +1793,16 @@ JniResult jni_dispatch(const char *class_desc,
                 /* Copy constructor: new Paint(src) */
                 if (nargs >= 1 && args[0] && args[0]->class_desc &&
                     strstr(args[0]->class_desc, "Paint")) {
-                    heap_iput_prim(this_obj, "color",    heap_iget_prim(args[0], "color"));
-                    heap_iput_prim(this_obj, "textsize", heap_iget_prim(args[0], "textsize"));
+                    heap_iput_prim(this_obj, "color",       heap_iget_prim(args[0], "color"));
+                    heap_iput_prim(this_obj, "textsize",    heap_iget_prim(args[0], "textsize"));
+                    heap_iput_prim(this_obj, "style",       heap_iget_prim(args[0], "style"));
+                    heap_iput_prim(this_obj, "strokewidth", heap_iget_prim(args[0], "strokewidth"));
                 } else {
-                    /* Default constructor */
-                    heap_iput_prim(this_obj, "color",    0xFF000000LL);
-                    heap_iput_prim(this_obj, "textsize", 0x41800000LL); /* 16.0f bits */
+                    /* Default constructor: FILL style, width 0, black */
+                    heap_iput_prim(this_obj, "color",       0xFF000000LL);
+                    heap_iput_prim(this_obj, "textsize",    0x41800000LL); /* 16.0f bits */
+                    heap_iput_prim(this_obj, "style",       0LL);          /* FILL */
+                    heap_iput_prim(this_obj, "strokewidth", 0LL);          /* 0.0f */
                 }
             }
             return res;
@@ -1821,8 +1825,17 @@ JniResult jni_dispatch(const char *class_desc,
             const char *s = args[0] && args[0]->str ? args[0]->str : "";
             res.is_void = 0; res.prim = (int64_t)(strlen(s) * 8); return res;
         }
-        if (!strcmp(method_name, "setStrokeWidth") ||
-            !strcmp(method_name, "setStyle") || !strcmp(method_name, "setAntiAlias") ||
+        if (!strcmp(method_name, "setStrokeWidth") && nargs >= 1 && this_obj) {
+            heap_iput_prim(this_obj, "strokewidth", arg_prim(args[0]));
+            return res;
+        }
+        if (!strcmp(method_name, "setStyle") && nargs >= 1 && this_obj) {
+            /* args[0] is Paint.Style enum object; read its "value" field */
+            int64_t sv = args[0] ? heap_iget_prim(args[0], "value") : 0LL;
+            heap_iput_prim(this_obj, "style", sv);
+            return res;
+        }
+        if (!strcmp(method_name, "setAntiAlias") ||
             !strcmp(method_name, "setTypeface") || !strcmp(method_name, "setAlpha") ||
             !strcmp(method_name, "setFlags") || !strcmp(method_name, "reset") ||
             !strcmp(method_name, "setShadowLayer") || !strcmp(method_name, "setFakeBoldText") ||
@@ -1850,7 +1863,13 @@ JniResult jni_dispatch(const char *class_desc,
             AineObj *paint = args[1];
             uint32_t color = paint ? (uint32_t)heap_iget_prim(paint, "color") : 0xFF888888u;
             if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
-            aine_canvas_fill_rect(lv.f, tv.f, rv.f - lv.f, bv.f - tv.f, color);
+            int64_t style = paint ? heap_iget_prim(paint, "style") : 0LL;
+            if (style == 1 /* STROKE */) {
+                union { int64_t i; float f; } sw; sw.i = paint ? heap_iget_prim(paint, "strokewidth") : 0LL;
+                aine_canvas_stroke_rect(lv.f, tv.f, rv.f - lv.f, bv.f - tv.f, sw.f, color);
+            } else {
+                aine_canvas_fill_rect(lv.f, tv.f, rv.f - lv.f, bv.f - tv.f, color);
+            }
 #endif
             return res;
         }
@@ -1863,7 +1882,13 @@ JniResult jni_dispatch(const char *class_desc,
             AineObj *paint = args[4];
             uint32_t color = paint ? (uint32_t)heap_iget_prim(paint, "color") : 0xFF888888u;
             if ((color & 0xFF000000u) == 0) color |= 0xFF000000u;
-            aine_canvas_fill_rect(l, t, r - l, b - t, color);
+            int64_t style = paint ? heap_iget_prim(paint, "style") : 0LL;
+            if (style == 1 /* STROKE */) {
+                union { int64_t i; float f; } sw; sw.i = paint ? heap_iget_prim(paint, "strokewidth") : 0LL;
+                aine_canvas_stroke_rect(l, t, r - l, b - t, sw.f, color);
+            } else {
+                aine_canvas_fill_rect(l, t, r - l, b - t, color);
+            }
 #endif
             return res;
         }
@@ -1925,8 +1950,15 @@ JniResult jni_dispatch(const char *class_desc,
                 tv.i = heap_iget_prim(rectf, "top");
                 rv.i = heap_iget_prim(rectf, "right");
                 bv.i = heap_iget_prim(rectf, "bottom");
-                aine_canvas_draw_arc(lv.f, tv.f, rv.f, bv.f,
-                                     start_deg, sweep_deg, use_center, color);
+                int64_t style = paint ? heap_iget_prim(paint, "style") : 0LL;
+                if (style == 1 /* STROKE */) {
+                    union { int64_t i; float f; } sw; sw.i = paint ? heap_iget_prim(paint, "strokewidth") : 0LL;
+                    aine_canvas_stroke_arc(lv.f, tv.f, rv.f, bv.f,
+                                          start_deg, sweep_deg, use_center, sw.f, color);
+                } else {
+                    aine_canvas_draw_arc(lv.f, tv.f, rv.f, bv.f,
+                                        start_deg, sweep_deg, use_center, color);
+                }
             }
 #endif
             return res;
