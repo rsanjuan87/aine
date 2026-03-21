@@ -18,6 +18,69 @@ uint32_t uleb128_decode(const uint8_t **ptr) {
     return result;
 }
 
+// ── SLEB128 ────────────────────────────────────────────────────────────────
+int32_t sleb128_decode(const uint8_t **ptr) {
+    int32_t result = 0;
+    int shift = 0;
+    const uint8_t *p = *ptr;
+    uint8_t b;
+    do {
+        b = *p++;
+        result |= (int32_t)(b & 0x7f) << shift;
+        shift += 7;
+    } while (b & 0x80);
+    if (shift < 32 && (b & 0x40)) result |= ~0 << shift; /* sign extend */
+    *ptr = p;
+    return result;
+}
+
+// ── Exception handler lookup ───────────────────────────────────────────────
+int32_t dex_find_catch_handler(const DexFile *df, const DexCodeItem *ci,
+                                uint32_t throw_pc, const char *exc_type)
+{
+    if (!ci || ci->tries_size == 0) return -1;
+
+    /* Tries array follows insns[], aligned to 4 bytes */
+    const uint16_t *insns = dex_insns(ci);
+    const uint8_t *after_insns = (const uint8_t *)insns + ci->insns_size * 2;
+    if ((uintptr_t)after_insns & 2) after_insns += 2;  /* 4-byte align */
+
+    /* encoded_catch_handler_list starts right after the tries array */
+    const uint8_t *handlers_base = after_insns + (size_t)ci->tries_size * 8;
+
+    for (uint16_t t = 0; t < ci->tries_size; t++) {
+        const uint8_t *tp = after_insns + (size_t)t * 8;
+        uint32_t start = (uint32_t)tp[0] | ((uint32_t)tp[1]<<8)
+                       | ((uint32_t)tp[2]<<16) | ((uint32_t)tp[3]<<24);
+        uint16_t count = (uint16_t)tp[4] | ((uint16_t)tp[5]<<8);
+        uint16_t hoff  = (uint16_t)tp[6] | ((uint16_t)tp[7]<<8);
+
+        if (throw_pc < start || throw_pc >= start + count) continue;
+
+        const uint8_t *p = handlers_base + hoff;
+        int32_t nhdr = sleb128_decode(&p);  /* negative → has catch-all */
+        int abs_nhdr = nhdr < 0 ? -nhdr : nhdr;
+
+        for (int h = 0; h < abs_nhdr; h++) {
+            uint32_t type_idx = uleb128_decode(&p);
+            uint32_t addr     = uleb128_decode(&p);
+            const char *tn = dex_type_name(df, type_idx);
+            if (tn) {
+                if (exc_type && strcmp(tn, exc_type) == 0) return (int32_t)addr;
+                /* Accept any Exception/Throwable/RuntimeException handler */
+                if (strcmp(tn, "Ljava/lang/Throwable;")        == 0) return (int32_t)addr;
+                if (strcmp(tn, "Ljava/lang/Exception;")        == 0) return (int32_t)addr;
+                if (strcmp(tn, "Ljava/lang/RuntimeException;") == 0) return (int32_t)addr;
+            }
+        }
+        if (nhdr <= 0) {
+            uint32_t catch_all = uleb128_decode(&p);
+            return (int32_t)catch_all;
+        }
+    }
+    return -1;
+}
+
 // ── Open ───────────────────────────────────────────────────────────────────
 int dex_open(DexFile *df, const uint8_t *data, size_t size) {
     if (size < sizeof(DexHeader)) return -1;

@@ -13,6 +13,7 @@ typedef enum {
     OBJ_ARRAY        = 5,   // primitive / object array
     OBJ_ARRAYLIST    = 6,   // java.util.ArrayList / LinkedList
     OBJ_HASHMAP      = 7,   // java.util.HashMap / LinkedHashMap
+    OBJ_ITERATOR     = 8,   // java.util.Iterator wrapping an ArrayList snapshot
 } ObjType;
 
 /* Instance field slot — stored inline in AineObj for user-defined classes */
@@ -74,6 +75,9 @@ void     heap_sput_prim(const char *cls, const char *field, int64_t value);
 void     heap_sput_obj (const char *cls, const char *field, AineObj *value);
 int64_t  heap_sget_prim(const char *cls, const char *field);
 AineObj *heap_sget_obj (const char *cls, const char *field);
+
+/* Iterator (OBJ_ITERATOR) — snapshot of a list at call time */
+AineObj *heap_iterator_new(const AineObj *list);  /* iter_pos = arr_cap = 0 */
 
 /* ArrayList (OBJ_ARRAYLIST) */
 AineObj *heap_arraylist_new(void);

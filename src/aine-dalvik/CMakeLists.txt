@@ -13,6 +13,12 @@ set(DALVIK_SOURCES
     main.c
 )
 
+# G5: --window mode — NSApplication + NSWindow + CAMetalLayer bootstrap
+# Only compiled on macOS (Objective-C + AppKit)
+if(APPLE)
+    list(APPEND DALVIK_SOURCES window.m)
+endif()
+
 add_executable(dalvikvm ${DALVIK_SOURCES})
 
 target_include_directories(dalvikvm PRIVATE .)
@@ -26,10 +32,17 @@ target_compile_options(dalvikvm PRIVATE
     -Wno-missing-field-initializers
 )
 
-# aine-shim is DYLD_INSERT_LIBRARIES at runtime — no link dependency.
-# dalvikvm links only against the system libraries.
+# window.m is Objective-C and needs ARC + AppKit frameworks
 if(APPLE)
-    target_link_libraries(dalvikvm PRIVATE)
+    set_source_files_properties(window.m PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc"
+    )
+    target_link_libraries(dalvikvm PRIVATE
+        "-framework Foundation"
+        "-framework AppKit"
+        "-framework Metal"
+        "-framework QuartzCore"
+    )
 endif()
 
 # Install to build output root so run-app.sh can find it with:

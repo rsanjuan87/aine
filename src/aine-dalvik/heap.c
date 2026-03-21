@@ -158,6 +158,22 @@ AineObj *heap_sget_obj(const char *cls, const char *field) {
     return (s && s->is_obj) ? s->obj : NULL;
 }
 
+/* ── Iterator ─────────────────────────────────────────────────────────── */
+
+AineObj *heap_iterator_new(const AineObj *list) {
+    int n = (list && list->type == OBJ_ARRAYLIST) ? list->arr_len : 0;
+    AineObj *it   = calloc(1, sizeof(AineObj));
+    it->type      = OBJ_ITERATOR;
+    it->arr_len   = n;
+    it->arr_cap   = 0;  /* iter_pos = 0 */
+    it->arr_obj   = calloc((size_t)(n > 0 ? n : 1), sizeof(AineObj *));
+    it->arr_prim  = calloc((size_t)(n > 0 ? n : 1), sizeof(int64_t));
+    if (list && list->arr_obj)
+        memcpy(it->arr_obj, list->arr_obj, (size_t)n * sizeof(AineObj *));
+    it->class_desc = "Ljava/util/Iterator;";
+    return it;
+}
+
 /* ── ArrayList ────────────────────────────────────────────────────────── */
 
 AineObj *heap_arraylist_new(void) {

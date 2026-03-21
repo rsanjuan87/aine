@@ -7,10 +7,12 @@ nativa, sin emulador, sin adb, directo sobre XNU.
 Android APIs → macOS APIs. `aine-shim.dylib` se inyecta via `DYLD_INSERT_LIBRARIES`.
 
 **Convención:**
-- `✅` — completado y verificado
-- `🔄` — en progreso
+- `✅` — completado y verificado con CTest
+- `🔄` — implementado, sin CTest aún
 - `⬜` — pendiente
 - `❌` — bloqueado (requiere paso previo)
+
+**Estado actual:** 20/20 CTests pasan — 21 marzo 2026
 
 ---
 
@@ -24,7 +26,7 @@ Android APIs → macOS APIs. `aine-shim.dylib` se inyecta via `DYLD_INSERT_LIBRA
 ### T0.2 — Build system CMake ✅
 - ✅ CMake configurado para `arm64-apple-macos13`
 - ✅ Toolchain en `cmake/toolchain-macos.cmake`
-- ✅ 31 targets compilan sin errores (`cmake --build build`)
+- ✅ Todos los targets compilan sin errores (`cmake --build build`)
 - ✅ CTest integrado (`ctest --test-dir build`)
 
 ### T0.3 — Headers Linux en macOS ✅
@@ -35,7 +37,9 @@ Android APIs → macOS APIs. `aine-shim.dylib` se inyecta via `DYLD_INSERT_LIBRA
 ```bash
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-macos.cmake
 cmake --build build
-# Debe compilar sin errores. Salida esperada: "Build files written to build/"
+# Debe compilar sin errores.
+ctest --test-dir build
+# Esperado: 19/19 tests passed, 0 tests failed
 ```
 
 ---
@@ -45,80 +49,139 @@ cmake --build build
 ### T1.1 — Parser de formato DEX ✅
 - ✅ `src/aine-dalvik/dex.h` / `dex.c` — parser DEX '035'
   - ✅ Header parser (magic, string_ids, type_ids, method_ids, class_defs)
-  - ✅ String table decoder (MUTF-8 + ULEB128)
+  - ✅ String table decoder (MUTF-8 + ULEB128 + SLEB128)
   - ✅ Class lookup por descriptor (`LFoo;`)
   - ✅ Method lookup por clase + nombre
   - ✅ `decode_class_methods()` — secciones direct/virtual con base diferencial independiente
   - ✅ `dex_code_item()` / `dex_insns()` — puntero a bytecode
+  - ✅ `dex_find_catch_handler(df, ci, throw_pc, exc_type)` — lookup en tabla try/catch
+    del DexCodeItem (DexTryItem[] + encoded_catch_handler_list, SLEB128 handler count)
 
 ### T1.2 — Heap mínimo sin GC ✅
 - ✅ `src/aine-dalvik/heap.h` / `heap.c`
-  - ✅ `OBJ_STRING` — strings internados
-  - ✅ `OBJ_PRINTSTREAM` — singleton `System.out`
+  - ✅ `OBJ_STRING` — strings internados via `heap_string()`
+  - ✅ `OBJ_PRINTSTREAM` — singleton `System.out` / `System.err`
   - ✅ `OBJ_STRINGBUILDER` — buffer append + toString
   - ✅ `OBJ_USERCLASS` — instancias de clases definidas en DEX
+  - ✅ `OBJ_ARRAY` — array primitivo + objetos con `arr_prim[]` / `arr_obj[]`
+  - ✅ `OBJ_ARRAYLIST` — `java.util.ArrayList` / LinkedList con `heap_arraylist_*`
+  - ✅ `OBJ_HASHMAP` — `java.util.HashMap` / LinkedHashMap con `heap_hashmap_*`
+  - ✅ `OBJ_ITERATOR` — snapshot de ArrayList para iteración (`heap_iterator_new`)
+  - ✅ iget/iput (instance fields) — `AineFieldSlot` dinámica por (obj, field_name)
+  - ✅ sget/sput (static fields) — tabla global por (class_desc, field_name)
 
-### T1.3 — Bridges JNI (java.lang mínimo) ✅
-- ✅ `src/aine-dalvik/jni.h` / `jni.c`
-  - ✅ `System.out` sget-object → singleton PrintStream
-  - ✅ `PrintStream.println(String)` → `printf`
-  - ✅ `System.getProperty(String)` → valores hardcoded (java.version, os.arch, java.vendor…)
-  - ✅ `StringBuilder.<init>` / `.append(String)` / `.toString()`
-  - ✅ `Object.<init>` — no-op
+### T1.3 — Bridges JNI ✅
+- ✅ `src/aine-dalvik/jni.h` / `jni.c` — ~1350 líneas, dispatch completo
+  - ✅ `java.io.PrintStream` — println/print/printf/flush para String, int, float, long, Object
+  - ✅ `java.lang.System` — currentTimeMillis/nanoTime/gc/arraycopy/getProperty/exit
+  - ✅ `android.util.Log` — v/d/i/w/e → fprintf(stderr)
+  - ✅ `java.lang.Integer/Long` — parseInt/parseLong/valueOf/toString/intValue/longValue/MAX_VALUE/MIN_VALUE
+  - ✅ `java.lang.Boolean/Double/Float/Character` — parse*/valueOf/isDigit/isLetter/toUpperCase/etc
+  - ✅ `java.lang.String` — length/equals/contains/startsWith/endsWith/indexOf/trim/
+    toLowerCase/toUpperCase/format/concat/charAt/substring/split/replace/replaceAll/
+    getBytes/compareTo/toCharArray/valueOf/isEmpty
+  - ✅ `java.lang.StringBuilder` — init/append (String/int/char/float/double/boolean)/toString/
+    length/delete/insert/charAt/reverse
+  - ✅ `java.lang.Math` — abs/max/min/sqrt/pow/floor/ceil/round/log/log10/sin/cos/tan/random
+  - ✅ `java.lang.Thread` — start/sleep/currentThread/getName/setName/join/interrupt/isAlive/setDaemon/setPriority
+  - ✅ `java.util.ArrayList/LinkedList` — add/get/set/size/remove/clear/contains/
+    toArray/iterator/subList/addAll + ArrayList(Collection) copy constructor
+  - ✅ `java.util.HashMap/LinkedHashMap/TreeMap` — put/get/containsKey/containsValue/
+    remove/size/keySet/values/entrySet/getOrDefault/putAll
+  - ✅ `java.util.Iterator` — hasNext/next/remove (snapshot OBJ_ITERATOR)
+  - ✅ `java.util.Collections` — sort/reverse/shuffle/unmodifiableList/synchronizedList/
+    singletonList/emptyList/min/max/frequency/nCopies
+  - ✅ `java.util.Arrays` — asList/sort/fill/copyOf/copyOfRange/toString
+  - ✅ `java.io.File` — exists/isFile/isDirectory/mkdirs/delete/getPath/getName/
+    getAbsolutePath/getParent/length/canRead/canWrite (via stat/mkdir)
+  - ✅ `android.app.Activity / Context` — lifecycle super-no-ops+
+    getSharedPreferences/getString/getResources/getPackageName/getFilesDir/getCacheDir
+  - ✅ `android.content.SharedPreferences` + Editor — getString/getInt/getBoolean/contains/
+    getAll/putString/putInt/putBoolean/remove/clear/commit/apply
+    (persistido en `/tmp/aine-prefs/<name>.prefs`)
+  - ✅ `android.content.Intent / Bundle` — putExtra/getXxxExtra/setAction/getAction/
+    setComponent/setData/addFlags
+  - ✅ `android.os.Handler / Looper` — post/postDelayed/removeCallbacks (+real delay queue)
+  - ✅ `android.os.SystemClock` — elapsedRealtime/uptimeMillis/sleep (CLOCK_MONOTONIC)
+  - ✅ `android.content.res.Resources` — getString/getText/getInteger stubs
+  - ✅ `java.lang.Exception / Error / Throwable` — init (con message)/getMessage/toString/
+    printStackTrace
+  - ✅ `jni_sget_prim()` — constantes estáticas: Integer.MAX_VALUE/MIN_VALUE,
+    Long.MAX_VALUE/MIN_VALUE, Short/Byte/Character/Boolean/Float/Double constants
 
 ### T1.4 — Intérprete de registros Dalvik ✅
 - ✅ `src/aine-dalvik/interp.h` / `interp.c`
   - ✅ `exec_code()` — loop principal, registro `Reg` union (prim/obj)
   - ✅ `exec_method()` — dispatch recursivo: DEX primero, JNI fallback
-  - ✅ `decode_35c()` — decodificación formato 35c (invoke args)
-  - ✅ Opcode 0x00 `nop`
-  - ✅ Opcodes 0x01–0x03 `move`, `move/from16`, `move/16`
-  - ✅ Opcode 0x07 `move-object`
-  - ✅ Opcodes 0x0a–0x0c `move-result`, `move-result-wide`, `move-result-object`
-  - ✅ Opcode 0x0e `return-void`
-  - ✅ Opcodes 0x0f, 0x11 `return`, `return-object`
-  - ✅ Opcodes 0x12–0x14 `const/4`, `const/16`, `const`
-  - ✅ Opcodes 0x1a–0x1b `const-string`, `const-string/jumbo`
-  - ✅ Opcode 0x22 `new-instance` (DEX class o JNI)
-  - ✅ Opcode 0x27 `throw` (unwind: return 1)
-  - ✅ Opcodes 0x28–0x2a `goto`, `goto/16`, `goto/32`
-  - ✅ Opcodes 0x32–0x37 `if-eq/ne/lt/ge/gt/le` (22t)
-  - ✅ Opcodes 0x38–0x3d `if-eqz/nez/ltz/gez/gtz/lez` (21t)
-  - ✅ Opcodes 0x52–0x5f `iget`/`iput` (stub: return 0, skip 2 units)
-  - ✅ Opcodes 0x60–0x6d `sget`/`sput` (sget-object → JNI, demás stub)
-  - ✅ Opcodes 0x6e–0x72 `invoke-virtual/super/direct/static/interface`
+  - ✅ Opcodes `0x00–0x0e` — nop, move (4 variantes), move-wide, move-object, move-result*, return-void
+  - ✅ `0x0d` move-exception — asigna la excepción activa (result_reg) al registro dest
+  - ✅ Opcodes `0x0f, 0x10, 0x11` — return, return-wide, return-object
+  - ✅ Opcodes `0x12–0x19` — const/4, const/16, const, const/high16, const-wide variants
+  - ✅ Opcodes `0x1a–0x1b` — const-string, const-string/jumbo
+  - ✅ `0x1c` const-class, `0x1d/0x1e` monitor-enter/exit (no-op), `0x1f` check-cast
+  - ✅ `0x20` instanceof (verifica OBJ type, class_desc, List/Map/Collection interfaces)
+  - ✅ `0x21` array-length, `0x22` new-instance (con dispatch JNI: ArrayList/HashMap/Thread/etc)
+  - ✅ `0x23` new-array, `0x24` filled-new-array, `0x25` filled-new-array/range
+  - ✅ `0x26` fill-array-data (payload, elem_width 1/2/4/8)
+  - ✅ `0x27` throw — lookup en tabla try/catch via `dex_find_catch_handler()`;
+    si hay handler salta al PC handler; si no, propaga con return 1
+  - ✅ `0x28–0x2a` goto/10t/20t/30t
+  - ✅ `0x2b` packed-switch, `0x2c` sparse-switch
+  - ✅ `0x2d–0x31` cmp-long/float/double/lt/gt
+  - ✅ `0x32–0x37` if-eq/ne/lt/ge/gt/le (22t), `0x38–0x3d` if-eqz/nez/ltz/gez/gtz/lez (21t)
+  - ✅ `0x44–0x4a` aget variants (int/wide/object/boolean/byte/char/short)
+  - ✅ `0x4b–0x51` aput variants
+  - ✅ `0x52–0x5f` iget/iput reales via `heap_iget/heap_iput` (0x54/0x5b para object refs)
+  - ✅ `0x60–0x6d` sget/sput con fallback a `jni_sget_prim()` para constantes estáticas
+  - ✅ `0x6e–0x72` invoke-virtual/super/direct/static/interface (35c)
+  - ✅ `0x74–0x78` invoke-*/range (3rc)
+  - ✅ `0x7b–0x8f` unary + conversiones int↔long↔float↔double↔byte↔char↔short
+  - ✅ `0x90–0xcf` aritmética binaria (add/sub/mul/div/rem/and/or/xor/shl/shr/ushr)
+    — 23x y 12x (2-addr), int y long
+  - ✅ `0xd0–0xd7` lit16 arithmetic (22s), `0xd8–0xe2` lit8 arithmetic (22b)
 
-### T1.5 — Binario dalvikvm ✅
+### T1.5 — Handler/Looper cooperativo ✅
+- ✅ `src/aine-dalvik/handler.h` / `handler.c`
+  - ✅ `handler_post_delayed(runnable, delay_ms)` — cola de prioridad por tiempo
+  - ✅ `handler_drain(interp, max_ms)` — dispara callbacks con nanosleep
+  - ✅ Integrado en Activity mode: se drena después de onResume()
+
+### T1.6 — Binario dalvikvm ✅
 - ✅ `src/aine-dalvik/main.c` — entry point `dalvikvm -cp <dex> <Class>`
-- ✅ `src/aine-dalvik/CMakeLists.txt` — C11, arm64, RUNTIME_OUTPUT = build/
+- ✅ Modo main(): ejecuta `static void main(String[])V`
+- ✅ Modo Activity: ciclo de vida onCreate→onStart→onResume→handler_drain→onPause→onStop→onDestroy
 
-**Cómo verificar F1:**
+**Cómo verificar F1 (CTests #1–#3, #11, #16–#19):**
 ```bash
 cmake --build build --target dalvikvm
 
-# M1 — HelloWorld
-./build/dalvikvm -cp test-apps/HelloWorld/HelloWorld.dex HelloWorld
-# Esperado:
-# AINE: ART Runtime funcional
-# java.version: 0
-# os.arch: aarch64
+# CTest #1: HelloWorld
+ctest --test-dir build -R dalvik-hello --output-on-failure
+# Esperado: "AINE: ART Runtime funcional" + "os.arch: aarch64"
 
-# M3 — Ciclo de vida Activity
-./build/dalvikvm -cp test-apps/M3Lifecycle/classes.dex M3LifecycleTest
-# Esperado:
-# AINE M3: iniciando ciclo de vida (sin emulador)
-# Runtime: The Android Project
-# Arch: aarch64
-# ---
-# AINE-M3: onCreate
-# AINE-M3: onStart
-# AINE-M3: onResume
-# AINE-M3: [app running...]
-# AINE-M3: onPause
-# AINE-M3: onStop
-# AINE-M3: onDestroy
-# ---
-# AINE M3: ciclo de vida completado OK
+# CTest #11: Ciclo de vida Activity M3
+ctest --test-dir build -R m3-lifecycle --output-on-failure
+# Esperado: "AINE-M3: onCreate" ... "AINE-M3: onDestroy"
+
+# CTest #16: Handler.postDelayed + iget/iput reales (G1)
+ctest --test-dir build -R handler-loop --output-on-failure
+# Esperado: "handler-fired"
+
+# CTest #17: ArrayList/HashMap/Math/String.format + fill-array-data (G2)
+ctest --test-dir build -R g2-stdlib --output-on-failure
+# Esperado: "list-size:3" "map-get:val1" "math-max:20" "fmt-42-hello" "g2-done"
+
+# CTest #18: try/catch + Thread.sleep + Iterator + String.split/replace + Collections.sort (G3)
+ctest --test-dir build -R g3-framework --output-on-failure
+# Esperado: "exc-caught" "sleep-ok" "iter:foo,bar,baz," "split-len:4" "replace:hello_world" "sort-0:apple" "g3-done"
+
+# CTest #19: Arrays.asList, Collections.reverse, Integer.MAX_VALUE, String.replaceAll (G4)
+ctest --test-dir build -R g4-stdlib2 --output-on-failure
+# Esperado: "asList-size:3" "sorted:apple" "reversed:cherry" "max-val:2147483647" "g4-done"
+
+# Todos a la vez:
+ctest --test-dir build
+# Esperado: 100% tests passed, 0 tests failed out of 19
 ```
 
 ---
@@ -148,8 +211,8 @@ cmake --build build --target dalvikvm
 
 **Cómo verificar F2:**
 ```bash
-ctest --test-dir build --output-on-failure
-# Esperado: 5/6 tests pass (shim-epoll, shim-futex, shim-eventfd, shim-prctl + binder tests)
+ctest --test-dir build -R "shim|epoll|futex|eventfd" --output-on-failure
+# Esperado: shim-epoll, shim-futex, shim-eventfd, shim-prctl pasan
 ```
 
 ---
@@ -178,7 +241,7 @@ ctest --test-dir build -R binder --output-on-failure
 
 ---
 
-## FASE 4 — PackageManager mínimo ⬜
+## FASE 4 — PackageManager mínimo ✅
 
 **Objetivo:** Parsear un APK real, extraer `classes.dex` y las libs .so nativas,
 y pasarlos al intérprete aine-dalvik o al loader de .so.
@@ -215,7 +278,7 @@ y pasarlos al intérprete aine-dalvik o al loader de .so.
 
 **Cómo verificar F4:**
 ```bash
-camke --build build --target aine-pm
+cmake --build build --target aine-pm
 ctest --test-dir build -R pm --output-on-failure
 # Esperado: Test #7: pm-install ... Passed
 
@@ -284,292 +347,214 @@ cmake --build build --target aine-loader
 
 ---
 
-## FASE 6 — ART completo (ClassLoader + reflection) ⬜
+## FASE 6 — Gráficos: EGL/Metal + Surface + VSYNC ✅
 
-**Objetivo:** Reemplazar el intérprete aine-dalvik mínimo por la pila ART completa,
-capaz de cargar el framework Android y ejecutar apps reales con reflection, JNI completo y GC.
+**Objetivo:** EGL 1.4 sobre Metal + NSWindow con CAMetalLayer + CVDisplayLink.
 
-> **Nota estratégica:** Esta es la fase más costosa. Hay dos rutas:
-> - **Ruta A (recomendada):** Compilar el ART de AOSP para host macOS
->   (`lunch aosp_arm64-eng && m art-host`) y enlazarlo con aine-shim.
-> - **Ruta B (alternativa):** Extender aine-dalvik con más opcodes y reflection básica
->   hasta cubrir el camino de arranque del framework.
+### T6.1 — EGL headless (IOSurface) ✅
+- ✅ `src/aine-hals/libegl/egl.m` — EGL 1.4 sobre Metal
+  - ✅ `eglGetDisplay` / `eglInitialize` / `eglChooseConfig`
+  - ✅ `eglCreateContext` (MTLDevice + command queue)
+  - ✅ `eglCreateWindowSurface` — acepta `CAMetalLayer*` como `EGLNativeWindowType`
+  - ✅ `eglCreatePbufferSurface` — usa IOSurface para headless
+  - ✅ `eglMakeCurrent` / `eglSwapBuffers` / `eglDestroySurface`
 
-### T6.1 — Ruta A: ART host build para macOS ⬜
-- ⬜ Clonar AOSP (solo módulo `art/` + dependencias mínimas)
-- ⬜ Parchear build system para macOS ARM64 host target
-- ⬜ Resolver dependencias: bionic → libSystem, Linux headers → aine-shim headers
-- ⬜ Compilar `libdex.a`, `libart.so`, `dalvikvm` para macOS ARM64
-- ⬜ Integrar output en `vendor/art-host/`
-- ⬜ Parchear `cmake/atl-integration.cmake` para usar ART host
+### T6.2 — NSWindow + CAMetalLayer ✅
+- ✅ `src/aine-hals/surface/surface.m` + `include/aine_surface.h`
+  - ✅ `aine_surface_create_window(w, h, title)` → `NSWindow` + `CAMetalLayer`
+  - ✅ `aine_surface_create_offscreen(w, h)` → IOSurface headless
+  - ✅ `aine_surface_get_layer(h)` → `CAMetalLayer*` (para `eglCreateWindowSurface`)
+  - ✅ `aine_surface_present(h)` → presenta el frame
+  - ✅ `aine_surface_destroy(h)` → libera NSWindow / IOSurface
 
-### T6.2 — Ruta B: Extender aine-dalvik ⬜
-- ⬜ Opcodes de aritmética completa (0x90–0xcf: add, sub, mul, div, rem, and, or, xor, shl, shr)
-- ⬜ Opcodes de arrays (0x21-0x26 fill-array, 0x44-0x51 aget/aput)
-- ⬜ Soporte de campos de instancia reales con offset (iget/iput con layout de clase)
-- ⬜ ClassLoader básico: carga clases de un DEX auxiliar en tiempo de ejecución
-- ⬜ Reflection mínima: `Class.forName`, `Method.invoke`, `Field.get/set`
-- ⬜ JNI completo: `RegisterNatives`, `FindClass`, `GetMethodID`, `CallVoidMethod`
-- ⬜ GC mark-and-sweep mínimo (para apps de larga duración)
-
-### T6.3 — Bootstrap del framework Android ⬜
-- ⬜ Compilar `framework.jar` (android.app, android.view, android.os) desde AOSP fuente
-- ⬜ Cargarlo en ART al arrancar aine (equivalente a `/system/framework/`)
-- ⬜ `Zygote` mínimo: pre-carga framework, fork() por app para arranque rápido
+### T6.3 — VSYNC via CVDisplayLink ✅
+- ✅ `src/aine-hals/vsync/vsync.m` + `vsync.h`
+  - ✅ `aine_vsync_create(cb, userdata)` → CVDisplayLink callback a 60fps
+  - ✅ `aine_vsync_start` / `aine_vsync_stop`
+  - ✅ `aine_vsync_wait_once()` — espera un tick de vsync (bloqueante)
 
 **Cómo verificar F6:**
 ```bash
-# Con Ruta A:
-./build/dalvikvm -Xbootclasspath:/path/to/framework.jar \
-    -cp test-apps/M3TestApp/classes.dex com.example.m3test.MainActivity
-# Esperado: onCreate llamado via android.app.Activity real
+# CTest EGL headless (no requiere display)
+ctest --test-dir build -R egl --output-on-failure
+# Esperado: test-egl-headless ... Passed
 
-# Con Ruta B:
-./build/dalvikvm -cp test-apps/FrameworkTest/classes.dex FrameworkTest
-# Esperado: Class.forName("android.app.Activity") -> ok
+# Verificación manual de surface (requiere display):
+./build/dalvikvm -cp test-apps/M3TestApp/classes.dex com.aine.testapp.MainActivity
+# Cuando T8.1 esté implementado, abrirá ventana NSWindow.
 ```
 
 ---
 
-## FASE 7 — Gráficos: ANGLE + Metal ⬜
+## FASE 7 — HALs de hardware ✅
 
-**Objetivo:** Las llamadas OpenGL ES de la app se traducen a Metal via ANGLE y
-el resultado aparece en un `NSWindow` en macOS.
+**Objetivo:** Stubs headless-safe para Audio/Cámara/Vulkan/Clipboard/Input — sin crash
+en CI headless; listos para conectar a la ventana en F8.
 
-### T7.1 — Integrar ANGLE (OpenGL ES → Metal) ⬜
-- ⬜ Añadir ANGLE como submódulo en `vendor/angle/`
-- ⬜ Compilar ANGLE para macOS ARM64 con backend Metal
-- ⬜ `cmake/angle.cmake` — integración en el build system de AINE
-- ⬜ Headers `EGL/egl.h`, `GLES2/gl2.h` disponibles para apps
+### T7.1 — Input stubs ✅
+- ✅ `src/aine-hals/input/` — stub headless-safe para teclado/ratón
+- ✅ CTest `test-input` verifica inicialización sin crash
+- ⬜ (F8) `NSEvent` keyDown/keyUp → Android `KeyEvent` (KEYCODE_*)
+- ⬜ (F8) `NSEvent` mouse* → Android `MotionEvent` ACTION_DOWN/MOVE/UP
 
-### T7.2 — Surface: NSWindow + CAMetalLayer ⬜
-- ⬜ `src/aine-hals/surface/` — gestión de ventanas nativas
-  - ⬜ `surface_create(width, height, title)` → `NSWindow` + `CAMetalLayer`
-  - ⬜ `surface_get_egl_display()` → `EGLDisplay` de ANGLE apuntando al `CAMetalLayer`
-  - ⬜ `surface_present()` → `[CAMetalLayer nextDrawable]` + commit
-  - ⬜ `surface_destroy()` → cierra `NSWindow`
+### T7.2 — Audio HAL ✅
+- ✅ `src/aine-hals/audio/` — stub headless-safe (CoreAudio placeholder)
+- ✅ CTest `test-audio` verifica inicialización sin crash
+- ⬜ (post-F8) `AudioTrack::write()` → `AudioUnit` render callback PCM 16-bit
+- ⬜ (post-F8) `AudioRecord::read()` → `AURemoteIO` input element
 
-### T7.3 — EGL bridge ⬜
-- ⬜ `src/aine-hals/egl/` — `EGLNativeWindowType` mapeado a `CAMetalLayer`
-  - ⬜ `eglCreateWindowSurface` con `ANativeWindow*` que encapsula `CAMetalLayer`
-  - ⬜ `eglSwapBuffers` → `surface_present()`
+### T7.3 — Cámara HAL ✅
+- ✅ `src/aine-hals/camera/` — `AVCaptureSession` stub
+- ✅ CTest `test-camera` verifica inicialización sin crash
 
-### T7.4 — SurfaceFlinger mínimo ⬜
-- ⬜ `src/aine-hals/surfaceflinger/` — compositor mínimo de una sola app
-  - ⬜ `SurfaceComposerClient::createSurface()` → devuelve handle a la `NSWindow`
-  - ⬜ `Surface::lock()` / `Surface::unlockAndPost()` — doble buffer CPU
-  - ⬜ Un solo layer por ahora (sin composición multi-ventana)
+### T7.4 — Vulkan via MoltenVK ✅
+- ✅ `src/aine-hals/vulkan/` — detección dinámica via `dlopen`
+- ✅ Fallback gracioso cuando MoltenVK no está instalado
+- ✅ CTest `test-vulkan`
 
-### T7.5 — VSYNC via CADisplayLink ⬜
-- ⬜ `src/aine-hals/vsync/` — source de VSYNC para Choreographer
-  - ⬜ `CADisplayLink` → `Choreographer.postFrameCallback()` cada frame (60fps)
-  - ⬜ Timestamp de VSYNC en nanosegundos pasado al `Choreographer`
-
-### T7.6 — Test de renderizado ⬜
-- ⬜ `test-apps/GLTriangle/` — app Android mínima que dibuja un triángulo OpenGL ES
-- ⬜ Compilar a APK, instalar via aine-pm, lanzar — debe aparecer ventana con triángulo
+### T7.5 — Portapapeles ✅
+- ✅ `src/aine-hals/clipboard/` — `NSPasteboard` ↔ `ClipboardManager`
+- ✅ `aine_clip_set/get/has/clear` — round-trip verificado en CTest `test-clipboard`
 
 **Cómo verificar F7:**
 ```bash
-cmake --build build --target aine-surface aine-egl aine-sf
-
-# Lanzar app de triángulo OpenGL ES
-./build/aine-run test-apps/GLTriangle/app-debug.apk
-# Esperado: NSWindow "GLTriangle" aparece con triángulo rojo en pantalla
-# Log: [aine-sf] frame rendered @ 60fps
+ctest --test-dir build -R "input|audio|camera|clipboard|vulkan" --output-on-failure
+# Esperado: test-input, test-audio, test-camera, test-clipboard, test-vulkan pasan
+# (los 5 son headless-safe: no requieren display, cámara ni altavoces)
 ```
 
 ---
 
-## FASE 8 — Input: teclado y ratón ⬜
+## FASE 8 — NSWindow display + Activity visual ✅
 
-**Objetivo:** Los eventos de teclado y ratón de macOS se traducen a eventos Android
-y llegan a la app correctamente.
+**Objetivo:** `dalvikvm --window` abre una ventana macOS real y ejecuta la Activity
+con render loop, VSYNC, e input básico.
 
-### T8.1 — NSEvent → Android KeyEvent ⬜
-- ⬜ `src/aine-hals/input/keyboard.mm`
-  - ⬜ `NSEvent` `keyDown`/`keyUp` → `android::KeyEvent` con keycodes Android
-  - ⬜ Tabla de traducción: macOS virtual keys → Android `KEYCODE_*`
-  - ⬜ Modificadores: Cmd → Meta, Option → Alt, Control → Control
+### T8.1 — dalvikvm --window mode ✅
+- ✅ `src/aine-dalvik/window.h` — declaración de `aine_window_run()`
+- ✅ `src/aine-dalvik/window.m` — `NSApplication` + NSRunLoop pump + interpreter
+  en background dispatch queue; headless-safe (window creation es opcional)
+  - ✅ `[NSApplication sharedApplication]` + `[NSApp finishLaunching]`
+  - ✅ `NSWindow` 800×600 + `CAMetalLayer` backing (Metal device requerido)
+  - ✅ Loop: `[[NSRunLoop mainRunLoop] runUntilDate:16ms]` hasta que termina el intérprete
+  - ✅ Cierre de ventana al finalizar lifecycle
+- ✅ `src/aine-dalvik/main.c` — flag `--window` / `-window` → llama `aine_window_run()`
+- ✅ `src/aine-dalvik/CMakeLists.txt` — `window.m` con `-fobjc-arc` + AppKit/Metal/QuartzCore
+- ✅ CTest #20 `g5-window-activity` — verifica lifecycle completo en modo ventana
 
-### T8.2 — NSEvent → Android MotionEvent (ratón/trackpad) ⬜
-- ⬜ `src/aine-hals/input/pointer.mm`
-  - ⬜ `mouseMoved` / `mouseDown` / `mouseUp` → `MotionEvent` ACTION_DOWN/MOVE/UP
-  - ⬜ Coordenadas: espacio NSWindow → espacio View Android (escala DPI)
-  - ⬜ Multi-touch trackpad (2 dedos) → `MotionEvent` con `POINTER_COUNT=2`
+### T8.2 — Input NSEvent → Android events ⬜
+- ⬜ `src/aine-hals/input/keyboard.mm` — keyDown/keyUp → `android.view.KeyEvent`
+- ⬜ `src/aine-hals/input/pointer.mm` — mouseDown/Moved/Up → `android.view.MotionEvent`
+- ⬜ Tabla de traducción: macOS virtual keys → Android `KEYCODE_*`
 
-### T8.3 — InputFlinger stub ⬜
-- ⬜ `src/aine-hals/input/inputflinger.cpp`
-  - ⬜ Cola de eventos entre producer (NSEvent) y consumer (ViewRootImpl)
-  - ⬜ `InputChannel` pair via Unix socket (como en AOSP real)
-
-### T8.4 — Test de input ⬜
-- ⬜ `test-apps/InputTest/` — app que muestra coordenadas del toque/click en pantalla
-- ⬜ Click en ventana → coordenadas actualizadas en la UI
+### T8.3 — aine-run CLI ⬜
+- ⬜ `src/aine-run/main.c` — `aine-run [--debug] <apk>`
+  - ⬜ Llama `aine-pm install` si el paquete no está registrado
+  - ⬜ Lanza `dalvikvm --window -cp <dex> <MainClass>` via `posix_spawn`
+  - ⬜ Gestiona proceso hijo, recoge logs, gestiona SIGTERM
 
 **Cómo verificar F8:**
 ```bash
-# Lanzar app de input test
-./build/aine-run test-apps/InputTest/app-debug.apk
-# Esperado: ventana con "Touch X: 0, Y: 0" actualizado al hacer click
-# Log: [aine-input] MotionEvent ACTION_DOWN x=150 y=200
+# CTest #20: g5-window-activity
+ctest --test-dir build -R g5-window-activity --output-on-failure
+# Esperado: "g5-window: onCreate" ... "g5-window: done" + Passed
+
+# Manual (requiere display):
+./build/dalvikvm --window -cp test-apps/G5WindowTest/classes.dex G5WindowActivity
+# Esperado:
+# [aine-window] window "G5WindowActivity" created (800x600)
+# g5-window: onCreate
+# g5-window: onResume
+# g5-window: onDestroy
+# g5-window: done
+
+./build/dalvikvm --window -cp test-apps/M3TestApp/classes.dex com.aine.testapp.MainActivity
+# Esperado: ventana "AINE" abre, lifecycle M3TestApp completo
 ```
 
 ---
 
-## FASE 9 — Audio: CoreAudio HAL ⬜
+## FASE 9 — Primera app visual real ⬜
 
-**Objetivo:** Las apps que reproducen audio usan `AudioTrack` / `AudioRecord` de Android,
-traducidos a `AudioUnit` de macOS.
+**Objetivo:** Una app Android FOSS real (calculadora, reloj, notes) ejecuta
+completamente — UI visible, botones responden, ciclo de vida limpio.
 
-### T9.1 — AudioTrack → AudioUnit (playback) ⬜
-- ⬜ `src/aine-hals/audio/audio_track.cpp`
-  - ⬜ `AudioTrack::write(buffer, size)` → `AudioUnit` render callback
-  - ⬜ Formato PCM 16-bit → CoreAudio `kAudioFormatLinearPCM`
-  - ⬜ Rate conversion si es necesario (44100 Hz / 48000 Hz)
+### T9.1 — Framework stubs de UI ⬜
+- ⬜ `android.view.View` / `ViewGroup` — layout stub mínimo (width/height/parent)
+- ⬜ `android.widget.TextView/Button/EditText` — stubs sin render 2D real
+- ⬜ `android.graphics.Canvas` → Metal 2D renderer mínimo (texto + rectángulos)
 
-### T9.2 — AudioRecord → AudioUnit (capture) ⬜
-- ⬜ `src/aine-hals/audio/audio_record.cpp`
-  - ⬜ `AudioRecord::read(buffer, size)` ← `AURemoteIO` input element
+### T9.2 — App de prueba: calculadora AOSP ⬜
+- ⬜ Compilar `packages/apps/ExactCalculator` de AOSP (o FOSS equivalent)
+- ⬜ `./build/aine-run ExactCalculator.apk` → ventana con UI visible
+- ⬜ Clicks en botones producen resultado correcto
 
-### T9.3 — AudioFlinger stub ⬜
-- ⬜ `src/aine-hals/audio/audioflinger.cpp`
-  - ⬜ `IAudioFlinger::openOutput()` → configura `AudioUnit`
-  - ⬜ Mixing de múltiples tracks (suma simple)
-
-### T9.4 — Test de audio ⬜
-- ⬜ `test-apps/AudioBeep/` — app que reproduce un tono de 440Hz
-- ⬜ Lanzar → se escucha beep en los altavoces del Mac
-
-**Cómo verificar F9:**
-```bash
-./build/aine-run test-apps/AudioBeep/app-debug.apk
-# Esperado: beep de 1 segundo a 440Hz
-# Log: [aine-audio] AudioUnit started, format: PCM16 44100Hz stereo
-```
-
----
-
-## FASE 10 — aine-run: lanzador de APKs ⬜
-
-**Objetivo:** Un comando único `aine-run <apk>` que instala el APK, lanza el proceso
-con aine-shim, abre la ventana y gestiona el ciclo de vida completo.
-
-### T10.1 — aine-run CLI ⬜
-- ⬜ `src/aine-run/main.c`
-  - ⬜ Parsear argumentos: `aine-run [--debug] <apk>`
-  - ⬜ Llamar a `aine-pm install` si no está instalado
-  - ⬜ Lanzar proceso app con `posix_spawn`:
-    ```
-    DYLD_INSERT_LIBRARIES=.../libaine-shim.dylib \
-    ./build/dalvikvm -cp /tmp/aine/<pkg>/classes.dex <MainClass>
-    ```
-  - ⬜ Monitorear proceso hijo, recoger logs, gestionar SIGTERM
-
-### T10.2 — Gestión de procesos ⬜
-- ⬜ Un proceso macOS por app (como especifica la arquitectura)
-- ⬜ `aine-binder-daemon` arranca antes que el proceso app
-- ⬜ Señales de ciclo de vida (SIGTERM → onPause → onStop → onDestroy)
-
-### T10.3 — aine-launcher GUI (SwiftUI) ⬜
-- ⬜ `src/aine-launcher/macos/` — app macOS nativa SwiftUI
-  - ⬜ Ventana principal con lista de APKs instalados
-  - ⬜ Drag & drop de APK para instalar
-  - ⬜ Icono de la app (extraído de `res/drawable/ic_launcher.png` del APK)
-  - ⬜ Botón "Launch" / "Stop"
-
-**Cómo verificar F10:**
-```bash
-# CLI
-./build/aine-run test-apps/M3TestApp/app-debug.apk
-# Esperado: ventana abre, lifecycle events en log, ventana cierra limpiamente
-
-# GUI (Fase 10.3)
-open build/aine-launcher.app
-# Esperado: ventana SwiftUI con lista de apps, drag APK funciona
-```
-
----
-
-## FASE 11 — Primera app visual real ⬜
-
-**Objetivo:** Una app AOSP real (calculadora, reloj, o app de notes FOSS) ejecuta
-completamente — UI visible, input funciona, ciclo de vida limpio.
-
-### T11.1 — App de prueba: calculadora AOSP ⬜
-- ⬜ Compilar `packages/apps/ExactCalculator` de AOSP
-- ⬜ Instalar via `aine-run ExactCalculator.apk`
-- ⬜ UI visible: botones numéricos, display
-- ⬜ Click en botones funciona (F8 requerida)
-- ⬜ Cálculos correctos
-
-### T11.2 — App de prueba: reloj AOSP ⬜
-- ⬜ Compilar `packages/apps/DeskClock` de AOSP
-- ⬜ UI visible: reloj analógico o digital
-- ⬜ Timer / alarma funciona (threading + handlers)
-
-### T11.3 — App FOSS: Termux o similar ⬜
-- ⬜ App sin dependencias de Google Play Services
-- ⬜ Terminal funcional en ventana macOS
-
-**Cómo verificar F11:**
+**Cómo verificar F9 (cuando implementado):**
 ```bash
 ./build/aine-run ExactCalculator.apk
-# Esperado: ventana "Calculator" con UI completa, clicks en botones producen resultado correcto
+# Esperado: ventana "Calculator" con UI completa, 2+2=4 funciona
 ```
 
 ---
 
-## FASE 12 — Optimización y beta pública ✅
+## Tabla de CTests (19/19 activos)
 
-### T12.1 — AOT compilation (eliminar workaround JIT) ⬜
-- ⬜ Compilar con `PRODUCT_MAX_PAGE_SIZE_SUPPORTED=16384` (páginas 16KB)
-- ⬜ `dex2oat` funcional para macOS ARM64
-- ⬜ Benchmark: arranque <2s para apps simples
-
-### T12.2 — Vulkan via MoltenVK ✅
-- ✅ `src/aine-hals/vulkan/` — detección dinámica de MoltenVK via `dlopen`
-- ✅ Fallback gracioso a EGL/Metal cuando MoltenVK no está instalado
-- ⬜ `cmake/moltenvk.cmake` — integración estática (opcional)
-
-### T12.3 — Cámara HAL ✅
-- ✅ `src/aine-hals/camera/` — `AVCaptureSession` → `camera_hal.h`
-- ✅ Stub headless-safe (no crash cuando no hay cámara)
-- ⬜ Permisos macOS (TCC) → `android.permission.CAMERA` (requiere UI)
-
-### T12.4 — Portapapeles y compartir ✅
-- ✅ `src/aine-hals/clipboard/` — `NSPasteboard` ↔ `ClipboardManager`
-- ✅ `aine_clip_set/get/has/clear` — round-trip verificado en CTest
-- ⬜ `Intent.ACTION_SEND` → macOS Share sheet (post-beta)
-
-### T12.5 — Beta pública ✅
-- ✅ `CHANGELOG.md` — historial completo de cambios
-- ✅ 15/15 CTests pasan en macOS ARM64 sin display/cámara/altavoces
-- ✅ Documentación: ARCHITECTURE.md, CONTRIBUTING.md, README.md, CHANGELOG.md
-- ⬜ GitHub release con binarios (requiere firma de código)
+| # | Nombre CTest | Fase | Qué verifica |
+|---|-------------|------|--------------|
+| 1 | `dalvik-hello` | F1 | HelloWorld DEX — bytecodes básicos |
+| 2 | `dalvik-format` | F1 | DEX parser: string/method tables |
+| 3 | `dalvik-arith` | F1 | Opcodes aritméticos 0x90–0xe2 |
+| 4 | `shim-epoll` | F2 | epoll→kqueue traducción |
+| 5 | `shim-futex` | F2 | futex→pthread |
+| 6 | `binder-roundtrip` | F3 | Binder IPC round-trip |
+| 7 | `pm-install` | F4 | APK install/query pipeline |
+| 8 | `loader-path-map` | F5 | dlopen path mapping + native stub |
+| 9 | `test-egl-headless` | F6 | EGL 1.4 Metal headless (IOSurface) |
+| 10 | `test-vulkan` | F7 | MoltenVK detección dinámica |
+| 11 | `m3-lifecycle` | F1 | Activity lifecycle + system props |
+| 12 | `test-audio` | F7 | Audio HAL init headless |
+| 13 | `test-camera` | F7 | Cámara HAL init headless |
+| 14 | `test-clipboard` | F7 | NSPasteboard round-trip |
+| 15 | `test-input` | F7 | Input HAL init headless |
+| 16 | `handler-loop` | F1/G1 | Handler.postDelayed + iget/iput reales |
+| 17 | `g2-stdlib` | F1/G2 | ArrayList/HashMap/Math/String.format |
+| 18 | `g3-framework` | F1/G3 | try/catch + Thread.sleep + Iterator + split/replace |
+| 19 | `g4-stdlib2` | F1/G4 | Arrays.asList + Collections + Integer.MAX_VALUE |
+| 20 | `g5-window-activity` | F8/G5 | --window mode: NSApp + NSWindow + Activity lifecycle |
 
 ---
 
 ## Resumen de progreso
 
-| Fase | Nombre | Estado |
-|------|--------|--------|
-| F0 | Toolchain + entorno | ✅ |
-| F1 | aine-dalvik (intérprete DEX) | ✅ |
-| F2 | aine-shim (syscalls Linux→macOS) | ✅ |
-| F3 | aine-binder (Binder IPC) | ✅ |
-| F4 | PackageManager mínimo (APK parser) | ✅ |
-| F5 | Loader de libs nativas (.so ARM64) | ✅ |
-| F6 | ART completo (aine-dalvik Ruta B: opcodes + JNI) | ✅ |
-| F7 | Gráficos: EGL/Metal + GLES2 + Surface + VSync | ✅ |
-| F8 | Input: teclado y ratón (NSEvent→KeyEvent/MotionEvent) | ✅ |
-| F9 | Audio: CoreAudio HAL (AudioUnit + AudioTrack) | ✅ |
-| F10 | aine-run: lanzador AINE-nativo de APKs | ✅ |
-| F11 | Primera app visual real | ✅ |
-| F12 | Optimización + beta pública | ✅ |
+| Fase | Nombre | Estado | CTests |
+|------|--------|--------|--------|
+| F0 | Toolchain + entorno | ✅ | — |
+| F1 | aine-dalvik — intérprete DEX completo (G1–G4 incluidos) | ✅ | #1,#2,#3,#11,#16,#17,#18,#19 |
+| F2 | aine-shim — syscalls Linux→macOS | ✅ | #4,#5 |
+| F3 | aine-binder — Binder IPC | ✅ | #6 |
+| F4 | PackageManager mínimo — APK/ZIP/AXML parser | ✅ | #7 |
+| F5 | Loader de libs nativas (.so ARM64) | ✅ | #8 |
+| F6 | Gráficos: EGL 1.4/Metal + CAMetalLayer + VSYNC | ✅ | #9 |
+| F7 | HALs: Audio/Cámara/Vulkan/Clipboard/Input | ✅ | #10,#12,#13,#14,#15 |
+| F8 | NSWindow display + Activity visual (--window, T8.1) | ✅/⬜ | #20 (T8.1 ✅; T8.2/T8.3 ⬜) |
+| F9 | Primera app Android visual real | ⬜ | — |
 
-**Roadmap F0–F12 completo. 15/15 CTests pasan. Beta pública lista.**
+**Estado actual: 20/20 CTests pasan. Siguiente: F8 T8.2 (NSEvent input) + F9 UI stubs.**
 
 ---
 
-*Actualizado: 20 marzo 2026 — F0→F12 completadas — 0.1.0-beta*
+## Changelog de implementación
+
+| Commits | Descripción | Tests |
+|---------|-------------|-------|
+| `282c65bd` | G1: Handler.postDelayed + iget/iput reales, CTest #16 | 16/16 |
+| `9c4aaa9b` | G2: ArrayList/HashMap/Math/String.format, fill-array-data, CTest #17 | 17/17 |
+| `d9650d52` | ROADMAP F0→F12 inicial | 17/17 |
+| (wip) | G3: dex_find_catch_handler, Thread.sleep, Iterator, String.split/replace, Collections, SharedPrefs, java.io.File, Intent, CTest #18 | 18/18 |
+| (wip) | G4: Arrays.asList, ArrayList(Collection), jni_sget_prim, fix `<init>` ordering, CTest #19 | 19/19 |
+| (wip) | ROADMAP: actualizado a 19/19 CTests, F6/F7 reales, G1–G4 documentados | 19/19 |
+| (wip) | G5: --window flag, window.m NSApp+NSRunLoop pump, G5WindowTest, CTest #20 | 20/20 |
+
+---
+
+*Actualizado: 21 marzo 2026 — 20/20 CTests — próximo: F8 T8.2 NSEvent input + F9 UI stubs*

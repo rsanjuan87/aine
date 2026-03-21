@@ -3,6 +3,7 @@
 // Usage (compatible with real dalvikvm):
 //   dalvikvm [-cp <dexfile>] <ClassName> [args...]
 //   dalvikvm -Xnoimage-dex2oat -Xusejit:false -cp foo.dex ClassName
+//   dalvikvm --window -cp foo.dex ActivityClassName   (opens NSWindow)
 //
 // Flags starting with -X are accepted and silently ignored (ART compat).
 //
@@ -12,6 +13,7 @@
 
 #include "dex.h"
 #include "interp.h"
+#include "window.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,22 +24,28 @@
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-        "Usage: %s [-cp <dexfile>] [-X...] <ClassName> [args...]\n"
+        "Usage: %s [-cp <dexfile>] [--window] [-X...] <ClassName> [args...]\n"
         "\n"
         "AINE native Dalvik interpreter — runs DEX bytecode on macOS ARM64.\n"
-        "No Android emulator required.\n",
+        "No Android emulator required.\n"
+        "\n"
+        "  --window   Open a native NSWindow for Activity classes.\n",
         argv0);
 }
 
 int main(int argc, char *argv[]) {
     const char *dex_path    = NULL;
     const char *class_name  = NULL;
+    int         window_mode = 0;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-cp") == 0 || strcmp(argv[i], "-classpath") == 0) {
             if (++i >= argc) { usage(argv[0]); return 1; }
             dex_path = argv[i];
+        } else if (strcmp(argv[i], "--window") == 0 ||
+                   strcmp(argv[i], "-window")  == 0) {
+            window_mode = 1;
         } else if (strncmp(argv[i], "-X", 2) == 0) {
             // ART flags — ignore silently
         } else if (strncmp(argv[i], "-D", 2) == 0) {
@@ -91,7 +99,13 @@ int main(int argc, char *argv[]) {
 
     // Run
     AineInterp *interp = interp_new(&df);
-    int ret = interp_run_main(interp, descriptor);
+    int ret;
+    if (window_mode) {
+        /* Open NSWindow + run Activity lifecycle (headless-safe) */
+        ret = aine_window_run(interp, descriptor);
+    } else {
+        ret = interp_run_main(interp, descriptor);
+    }
     interp_free(interp);
     munmap(mem, sz);
     return ret;

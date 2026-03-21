@@ -28,3 +28,6 @@ JniResult jni_dispatch(const char *class_desc,
 // class_desc:  "Ljava/lang/System;"
 // field_name:  "out"
 AineObj *jni_sget_object(const char *class_desc, const char *field_name);
+
+// Get a static primitive field (Integer.MAX_VALUE etc.)
+int64_t  jni_sget_prim(const char *class_desc, const char *field_name);

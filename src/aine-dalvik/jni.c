@@ -7,10 +7,147 @@
 #include <time.h>
 #include <math.h>
 #include <ctype.h>
+#include <float.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 // ── Static field singletons ──────────────────────────────────────────────
 static AineObj g_system_out = { .type = OBJ_PRINTSTREAM };
 static AineObj g_system_err = { .type = OBJ_PRINTSTREAM };
+
+// ── jni_sget_prim — known static primitive constants ─────────────────────
+int64_t jni_sget_prim(const char *class_desc, const char *field_name) {
+    if (!class_desc || !field_name) return 0;
+    if (strcmp(class_desc, "Ljava/lang/Integer;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return 2147483647LL;
+        if (strcmp(field_name, "MIN_VALUE") == 0) return -2147483648LL;
+        if (strcmp(field_name, "SIZE") == 0) return 32;
+        if (strcmp(field_name, "BYTES") == 0) return 4;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Long;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return INT64_MAX;
+        if (strcmp(field_name, "MIN_VALUE") == 0) return INT64_MIN;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Short;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return 32767;
+        if (strcmp(field_name, "MIN_VALUE") == 0) return -32768;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Byte;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return 127;
+        if (strcmp(field_name, "MIN_VALUE") == 0) return -128;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Character;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return 65535;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Boolean;") == 0) {
+        if (strcmp(field_name, "TRUE") == 0)  return 1;
+        if (strcmp(field_name, "FALSE") == 0) return 0;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Float;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return (int64_t)(double)FLT_MAX;
+    }
+    if (strcmp(class_desc, "Ljava/lang/Double;") == 0) {
+        if (strcmp(field_name, "MAX_VALUE") == 0) return (int64_t)DBL_MAX;
+    }
+    return 0;
+}
+
+// ── String helpers ────────────────────────────────────────────────────────
+
+/* Split str by delim → OBJ_ARRAY of OBJ_STRING */
+static AineObj *string_split(const char *str, const char *delim) {
+    if (!str) str = "";
+    if (!delim || !*delim) {
+        AineObj *a = heap_array_new(1);
+        a->arr_obj[0] = heap_string(str);
+        return a;
+    }
+    /* Count parts */
+    size_t dlen = strlen(delim), count = 1;
+    const char *p = str;
+    while ((p = strstr(p, delim))) { count++; p += dlen; }
+    AineObj *arr = heap_array_new((int)count);
+    const char *s = str; int i = 0;
+    while ((p = strstr(s, delim))) {
+        char *part = strndup(s, (size_t)(p - s));
+        arr->arr_obj[i++] = heap_string(part); free(part);
+        s = p + dlen;
+    }
+    arr->arr_obj[i] = heap_string(s);
+    return arr;
+}
+
+/* Replace first/all occurrences of from → to */
+static char *str_replace_all(const char *str, const char *from, const char *to) {
+    if (!str) return strdup("");
+    if (!from || !*from) return strdup(str);
+    if (!to) to = "";
+    size_t flen = strlen(from), tlen = strlen(to);
+    size_t cap = strlen(str) * 2 + 64;
+    char *out = malloc(cap); int pos = 0;
+    const char *s = str;
+    while (*s) {
+        const char *found = strstr(s, from);
+        if (!found) {
+            size_t rest = strlen(s);
+            while (pos + rest + 1 > cap) { cap *= 2; out = realloc(out, cap); }
+            memcpy(out + pos, s, rest); pos += (int)rest; break;
+        }
+        size_t before = (size_t)(found - s);
+        while (pos + before + tlen + 1 > cap) { cap *= 2; out = realloc(out, cap); }
+        memcpy(out + pos, s, before); pos += (int)before;
+        memcpy(out + pos, to, tlen); pos += (int)tlen;
+        s = found + flen;
+    }
+    out[pos] = 0;
+    return out;
+}
+
+// ── SharedPreferences ─────────────────────────────────────────────────────
+#define PREFS_DIR "/tmp/aine-prefs"
+
+/* Load a prefs file → OBJ_HASHMAP */
+static AineObj *prefs_load(const char *name) {
+    AineObj *map = heap_hashmap_new();
+    if (!name) return map;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s.prefs", PREFS_DIR, name);
+    FILE *f = fopen(path, "r");
+    if (!f) return map;
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = 0;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        heap_hashmap_put(map, line, heap_string(eq + 1));
+    }
+    fclose(f);
+    return map;
+}
+
+/* Save a prefs OBJ_HASHMAP to file */
+static void prefs_save(const char *name, const AineObj *map) {
+    if (!name || !map) return;
+#ifdef __APPLE__
+    mkdir(PREFS_DIR, 0755);
+#else
+    mkdir(PREFS_DIR, 0755);
+#endif
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s.prefs", PREFS_DIR, name);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    /* arr_obj has pairs: [key_str, val_str, key_str, val_str, ...] */
+    for (int i = 0; i + 1 < map->arr_len; i += 2) {
+        AineObj *k = map->arr_obj[i];
+        AineObj *v = map->arr_obj[i + 1];
+        if (k && k->str && v && v->str &&
+            strcmp(k->str, "__prefs_name__") != 0)
+            fprintf(f, "%s=%s\n", k->str, v->str);
+    }
+    fclose(f);
+}
 
 AineObj *jni_sget_object(const char *class_desc, const char *field_name) {
     if (strcmp(class_desc, "Ljava/lang/System;") == 0) {
@@ -339,6 +476,41 @@ JniResult jni_dispatch(const char *class_desc,
         if (strcmp(method_name, "toCharArray") == 0) {
             res.is_void = 0; res.obj = heap_array_new((int)strlen(str_val)); return res;
         }
+        if (strcmp(method_name, "split") == 0 && nargs >= 1) {
+            const char *delim = (args[0] && args[0]->str) ? args[0]->str : "";
+            /* Strip regex anchors for simple delimiters */
+            char simple_delim[64]; strncpy(simple_delim, delim, 63); simple_delim[63]=0;
+            if (strlen(simple_delim) > 1 &&
+                (simple_delim[0] == '\\' || simple_delim[0] == '^'))
+                memmove(simple_delim, simple_delim + 1, strlen(simple_delim));
+            res.is_void = 0; res.obj = string_split(str_val, simple_delim); return res;
+        }
+        if (strcmp(method_name, "replace") == 0 && nargs >= 2) {
+            const char *from = (args[0] && args[0]->str) ? args[0]->str : "";
+            const char *to   = (args[1] && args[1]->str) ? args[1]->str : "";
+            char *r = str_replace_all(str_val, from, to);
+            res.is_void = 0; res.obj = heap_string(r); free(r); return res;
+        }
+        if (strcmp(method_name, "replaceAll") == 0 && nargs >= 2) {
+            const char *pat = (args[0] && args[0]->str) ? args[0]->str : "";
+            const char *rep = (args[1] && args[1]->str) ? args[1]->str : "";
+            /* Treat pattern as literal for common cases */
+            char *r = str_replace_all(str_val, pat, rep);
+            res.is_void = 0; res.obj = heap_string(r); free(r); return res;
+        }
+        if (strcmp(method_name, "matches") == 0) {
+            res.is_void = 0; res.prim = 0; return res;  /* stub */
+        }
+        if (strcmp(method_name, "getBytes") == 0) {
+            int len = (int)strlen(str_val);
+            AineObj *arr = heap_array_new(len);
+            for (int i = 0; i < len; i++) arr->arr_prim[i] = (uint8_t)str_val[i];
+            res.is_void = 0; res.obj = arr; return res;
+        }
+        if (strcmp(method_name, "compareTo") == 0 && nargs >= 1) {
+            const char *other = (args[0] && args[0]->str) ? args[0]->str : "";
+            res.is_void = 0; res.prim = strcmp(str_val, other); return res;
+        }
         if (strcmp(method_name, "<init>") == 0) { res.is_void = 1; return res; }
     }
 
@@ -368,7 +540,8 @@ JniResult jni_dispatch(const char *class_desc,
     }
 
     // ── Object base methods ──────────────────────────────────────────────
-    if (strcmp(method_name, "<init>") == 0) { res.is_void = 1; return res; }
+    // NOTE: <init> is NOT intercepted here — specialized class sections below
+    // (ArrayList, HashMap, Thread, File, Exception, etc.) have their own <init>.
     if (strcmp(method_name, "toString") == 0) {
         res.is_void = 0;
         if (this_obj && this_obj->type == OBJ_STRING) res.obj = this_obj;
@@ -408,7 +581,15 @@ JniResult jni_dispatch(const char *class_desc,
     if (strstr(class_desc, "java/util/ArrayList") ||
         strstr(class_desc, "java/util/LinkedList") ||
         strstr(class_desc, "java/util/Vector")) {
-        if (!strcmp(method_name, "<init>")) { return res; }
+        if (!strcmp(method_name, "<init>")) {
+            /* ArrayList(Collection) constructor — populate from source */
+            if (nargs >= 1 && args[0] && this_obj &&
+                args[0]->type == OBJ_ARRAYLIST) {
+                for (int i = 0; i < args[0]->arr_len; i++)
+                    heap_arraylist_add(this_obj, args[0]->arr_obj[i]);
+            }
+            return res;
+        }
         if (!this_obj || this_obj->type != OBJ_ARRAYLIST) return res;
         if (!strcmp(method_name, "add")) {
             /* add(E) — single arg; add(int, E) — index insert (stub: append) */
@@ -454,7 +635,15 @@ JniResult jni_dispatch(const char *class_desc,
             res.is_void = 0; res.obj = arr; return res;
         }
         if (!strcmp(method_name, "iterator") || !strcmp(method_name, "listIterator")) {
-            res.is_void = 0; res.obj = this_obj; return res; /* stub: self-iteration */
+            res.is_void = 0; res.obj = heap_iterator_new(this_obj); return res;
+        }
+        if (!strcmp(method_name, "subList") && nargs >= 2) {
+            int from_idx = (args[0] && args[0]->str) ? atoi(args[0]->str) : 0;
+            int to_idx   = (args[1] && args[1]->str) ? atoi(args[1]->str) : 0;
+            AineObj *sub = heap_arraylist_new();
+            for (int i = from_idx; i < to_idx && i < this_obj->arr_len; i++)
+                heap_arraylist_add(sub, this_obj->arr_obj[i]);
+            res.is_void = 0; res.obj = sub; return res;
         }
         return res;
     }
@@ -526,12 +715,40 @@ JniResult jni_dispatch(const char *class_desc,
             strcmp(method_name, "startActivity") == 0 ||
             strcmp(method_name, "setContentView") == 0 ||
             strcmp(method_name, "getSystemService") == 0 ||
-            strcmp(method_name, "getResources") == 0 ||
-            strcmp(method_name, "runOnUiThread") == 0) {
+            strcmp(method_name, "runOnUiThread") == 0 ||
+            strcmp(method_name, "onCreate") == 0 ||
+            strcmp(method_name, "onStart") == 0 ||
+            strcmp(method_name, "onResume") == 0 ||
+            strcmp(method_name, "onPause") == 0 ||
+            strcmp(method_name, "onStop") == 0 ||
+            strcmp(method_name, "onDestroy") == 0 ||
+            strcmp(method_name, "<init>") == 0 ||
+            strcmp(method_name, "invalidate") == 0 ||
+            strcmp(method_name, "requestWindowFeature") == 0) {
             return res;  // is_void = 1
+        }
+        if (strcmp(method_name, "getResources") == 0) {
+            static AineObj g_resources = { .type = OBJ_NULL, .class_desc = "Landroid/content/res/Resources;" };
+            res.is_void = 0; res.obj = &g_resources; return res;
         }
         if (strcmp(method_name, "getString") == 0) {
             res.is_void = 0; res.obj = heap_string(""); return res;
+        }
+        if (strcmp(method_name, "getSharedPreferences") == 0 && nargs >= 1) {
+            const char *pname = (args[0] && args[0]->str) ? args[0]->str : "default";
+            AineObj *map = prefs_load(pname);
+            map->class_desc = "Landroid/content/SharedPreferences;";
+            heap_hashmap_put(map, "__prefs_name__", heap_string(pname));
+            res.is_void = 0; res.obj = map; return res;
+        }
+        if (strcmp(method_name, "getPackageName") == 0) {
+            res.is_void = 0; res.obj = heap_string("com.aine.app"); return res;
+        }
+        if (strcmp(method_name, "getFilesDir") == 0) {
+            res.is_void = 0; res.obj = heap_string("/tmp/aine-files"); return res;
+        }
+        if (strcmp(method_name, "getCacheDir") == 0) {
+            res.is_void = 0; res.obj = heap_string("/tmp/aine-cache"); return res;
         }
     }
 
@@ -568,9 +785,57 @@ JniResult jni_dispatch(const char *class_desc,
     }
 
     // ── Runnable / Thread ────────────────────────────────────────────────
-    if (strstr(class_desc, "java/lang/Thread") ||
-        strstr(class_desc, "java/lang/Runnable")) {
-        return res;  // stub all thread ops
+    if (strstr(class_desc, "java/lang/Thread")) {
+        if (strcmp(method_name, "<init>") == 0) {
+            /* Thread(Runnable) or Thread(String, Runnable) etc. */
+            if (nargs >= 1 && args[0] && args[0]->class_desc)
+                heap_iput_obj(this_obj, "target", args[0]);
+            if (nargs >= 2 && args[1] && args[1]->class_desc)
+                heap_iput_obj(this_obj, "target", args[1]);
+            return res;
+        }
+        if (strcmp(method_name, "start") == 0) {
+            AineObj *target = heap_iget_obj(this_obj, "target");
+            if (target) handler_post_delayed(target, 0);
+            return res;
+        }
+        if (strcmp(method_name, "sleep") == 0 && nargs >= 1) {
+            int64_t ms = 0;
+            if (args[0] && args[0]->str) ms = atoll(args[0]->str);
+            if (ms > 0) {
+                struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+                nanosleep(&ts, NULL);
+            }
+            return res;
+        }
+        if (strcmp(method_name, "currentThread") == 0) {
+            static AineObj g_main_thread = { .type = OBJ_NULL,
+                                             .class_desc = "Ljava/lang/Thread;" };
+            res.is_void = 0; res.obj = &g_main_thread; return res;
+        }
+        if (strcmp(method_name, "getName") == 0) {
+            AineObj *name = heap_iget_obj(this_obj, "name");
+            res.is_void = 0; res.obj = name ? name : heap_string("main"); return res;
+        }
+        if (strcmp(method_name, "setName") == 0 && nargs >= 1) {
+            heap_iput_obj(this_obj, "name", args[0]);
+            return res;
+        }
+        if (strcmp(method_name, "join") == 0 ||
+            strcmp(method_name, "interrupt") == 0 ||
+            strcmp(method_name, "setDaemon") == 0 ||
+            strcmp(method_name, "setPriority") == 0 ||
+            strcmp(method_name, "getThreadGroup") == 0) {
+            return res;  /* no-op in cooperative single-thread mode */
+        }
+        if (strcmp(method_name, "isAlive") == 0 ||
+            strcmp(method_name, "isInterrupted") == 0) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        return res;
+    }
+    if (strstr(class_desc, "java/lang/Runnable")) {
+        return res;  /* caller should dispatch run() directly */
     }
 
     // ── Class ───────────────────────────────────────────────────────────
@@ -582,6 +847,474 @@ JniResult jni_dispatch(const char *class_desc,
             res.is_void = 0; res.obj = args[0]; return res;
         }
     }
+
+    // ── java.util.Iterator ───────────────────────────────────────────────
+    if (this_obj && this_obj->type == OBJ_ITERATOR) {
+        if (!strcmp(method_name, "hasNext")) {
+            res.is_void = 0; res.prim = (this_obj->arr_cap < this_obj->arr_len) ? 1 : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "next")) {
+            if (this_obj->arr_cap < this_obj->arr_len) {
+                res.is_void = 0; res.obj = this_obj->arr_obj[this_obj->arr_cap++];
+            } else { res.is_void = 0; res.obj = NULL; }
+            return res;
+        }
+        if (!strcmp(method_name, "remove")) { return res; }
+    }
+    if (strstr(class_desc, "java/util/Iterator") ||
+        strstr(class_desc, "java/util/ListIterator")) {
+        if (!strcmp(method_name, "hasNext") && this_obj) {
+            res.is_void = 0; res.prim = (this_obj->arr_cap < this_obj->arr_len) ? 1 : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "next") && this_obj) {
+            if (this_obj->arr_cap < this_obj->arr_len) {
+                res.is_void = 0; res.obj = this_obj->arr_obj[this_obj->arr_cap++];
+            } else { res.is_void = 0; res.obj = NULL; }
+            return res;
+        }
+        return res;
+    }
+
+    // ── android.content.SharedPreferences ────────────────────────────────
+    if (strstr(class_desc, "SharedPreferences") ||
+        (this_obj && this_obj->class_desc &&
+         strstr(this_obj->class_desc, "SharedPreferences"))) {
+        if (!this_obj || this_obj->type != OBJ_HASHMAP) { return res; }
+        AineObj *pname_obj = heap_hashmap_get(this_obj, "__prefs_name__");
+        const char *pname = pname_obj && pname_obj->str ? pname_obj->str : "default";
+
+        if (!strcmp(method_name, "getString") && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            AineObj *v = heap_hashmap_get(this_obj, key);
+            if (!v && nargs >= 2) v = args[1];
+            res.is_void = 0; res.obj = v ? v : heap_string(""); return res;
+        }
+        if (!strcmp(method_name, "getInt") && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            AineObj *v = heap_hashmap_get(this_obj, key);
+            int64_t def = (nargs >= 2 && args[1] && args[1]->str) ? atoll(args[1]->str) : 0;
+            res.is_void = 0; res.prim = v && v->str ? atoll(v->str) : def; return res;
+        }
+        if (!strcmp(method_name, "getLong") && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            AineObj *v = heap_hashmap_get(this_obj, key);
+            int64_t def = (nargs >= 2 && args[1] && args[1]->str) ? atoll(args[1]->str) : 0;
+            res.is_void = 0; res.prim = v && v->str ? atoll(v->str) : def; return res;
+        }
+        if (!strcmp(method_name, "getBoolean") && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            AineObj *v = heap_hashmap_get(this_obj, key);
+            int64_t def = (nargs >= 2 && args[1] && args[1]->str) ? atoll(args[1]->str) : 0;
+            res.is_void = 0;
+            res.prim = v && v->str ? (strcmp(v->str,"true")==0||strcmp(v->str,"1")==0?1:0) : def;
+            return res;
+        }
+        if (!strcmp(method_name, "contains") && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            res.is_void = 0; res.prim = heap_hashmap_contains_key(this_obj, key); return res;
+        }
+        if (!strcmp(method_name, "getAll")) {
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "edit")) {
+            /* Return a new editor map linked to same prefs */
+            AineObj *editor = heap_hashmap_new();
+            editor->class_desc = "Landroid/content/SharedPreferences$Editor;";
+            heap_hashmap_put(editor, "__prefs_name__", heap_string(pname));
+            /* Copy existing values into editor */
+            for (int i = 0; i + 1 < this_obj->arr_len; i += 2) {
+                AineObj *k = this_obj->arr_obj[i];
+                AineObj *v = this_obj->arr_obj[i + 1];
+                if (k && k->str && v)
+                    heap_hashmap_put(editor, k->str, v);
+            }
+            res.is_void = 0; res.obj = editor; return res;
+        }
+        return res;
+    }
+    if (strstr(class_desc, "SharedPreferences$Editor") ||
+        (this_obj && this_obj->class_desc &&
+         strstr(this_obj->class_desc, "SharedPreferences$Editor"))) {
+        if (!this_obj || this_obj->type != OBJ_HASHMAP) { return res; }
+        AineObj *pname_obj = heap_hashmap_get(this_obj, "__prefs_name__");
+        const char *pname = pname_obj && pname_obj->str ? pname_obj->str : "default";
+
+        if (!strncmp(method_name, "put", 3) && nargs >= 2) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            if (!strcmp(method_name, "putBoolean")) {
+                const char *sv = (args[1] && args[1]->str) ? args[1]->str : "0";
+                int bv = atoi(sv);
+                heap_hashmap_put(this_obj, key, heap_string(bv ? "true" : "false"));
+            } else {
+                heap_hashmap_put(this_obj, key, args[1] ? args[1] : heap_string(""));
+            }
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "remove") && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            heap_hashmap_remove(this_obj, key);
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "clear")) {
+            this_obj->arr_len = 0;
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "commit") || !strcmp(method_name, "apply")) {
+            prefs_save(pname, this_obj);
+            res.is_void = 0; res.prim = 1; return res;
+        }
+        return res;
+    }
+
+    // ── android.content.Intent / Bundle ──────────────────────────────────
+    if (strstr(class_desc, "android/content/Intent") ||
+        strstr(class_desc, "android/os/Bundle")) {
+        if (!strcmp(method_name, "<init>")) { return res; }
+        if (!strcmp(method_name, "putExtra") && nargs >= 2) {
+            if (this_obj) {
+                const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+                heap_iput_obj(this_obj, key, args[1]);
+            }
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if ((!strncmp(method_name, "get", 3) &&
+             strstr(method_name, "Extra")) && nargs >= 1) {
+            const char *key = (args[0] && args[0]->str) ? args[0]->str : "";
+            AineObj *v = this_obj ? heap_iget_obj(this_obj, key) : NULL;
+            if (!v && nargs >= 2) v = args[1];
+            res.is_void = 0; res.obj = v; return res;
+        }
+        if (!strcmp(method_name, "setAction") || !strcmp(method_name, "addFlags") ||
+            !strcmp(method_name, "setClass")  || !strcmp(method_name, "setComponent")) {
+            res.is_void = 0; res.obj = this_obj; return res;
+        }
+        if (!strcmp(method_name, "getAction") || !strcmp(method_name, "getType")) {
+            res.is_void = 0; res.obj = heap_string(""); return res;
+        }
+        return res;
+    }
+
+    // ── java.util.Collections ─────────────────────────────────────────────
+    if (strcmp(class_desc, "Ljava/util/Collections;") == 0) {
+        if (!strcmp(method_name, "sort") && nargs >= 1 && args[0] &&
+            args[0]->type == OBJ_ARRAYLIST) {
+            /* Simple string-compare sort (insertion sort for correctness) */
+            AineObj *list = args[0];
+            for (int i = 1; i < list->arr_len; i++) {
+                AineObj *key_obj = list->arr_obj[i];
+                const char *ks = key_obj && key_obj->str ? key_obj->str : "";
+                int j = i - 1;
+                while (j >= 0) {
+                    const char *js = list->arr_obj[j] && list->arr_obj[j]->str
+                                     ? list->arr_obj[j]->str : "";
+                    if (strcmp(js, ks) <= 0) break;
+                    list->arr_obj[j + 1] = list->arr_obj[j];
+                    j--;
+                }
+                list->arr_obj[j + 1] = key_obj;
+            }
+            return res;
+        }
+        if (!strcmp(method_name, "reverse") && nargs >= 1 && args[0] &&
+            args[0]->type == OBJ_ARRAYLIST) {
+            AineObj *list = args[0];
+            for (int i = 0, j = list->arr_len - 1; i < j; i++, j--) {
+                AineObj *tmp = list->arr_obj[i];
+                list->arr_obj[i] = list->arr_obj[j];
+                list->arr_obj[j] = tmp;
+            }
+            return res;
+        }
+        if (!strcmp(method_name, "shuffle") && nargs >= 1) { return res; }
+        if (!strcmp(method_name, "unmodifiableList") ||
+            !strcmp(method_name, "synchronizedList") ||
+            !strcmp(method_name, "unmodifiableMap")) {
+            res.is_void = 0; res.obj = nargs >= 1 ? args[0] : NULL; return res;
+        }
+        if (!strcmp(method_name, "singletonList") && nargs >= 1) {
+            AineObj *list = heap_arraylist_new();
+            heap_arraylist_add(list, args[0]);
+            res.is_void = 0; res.obj = list; return res;
+        }
+        if (!strcmp(method_name, "emptyList") || !strcmp(method_name, "EMPTY_LIST")) {
+            res.is_void = 0; res.obj = heap_arraylist_new(); return res;
+        }
+        if (!strcmp(method_name, "min") || !strcmp(method_name, "max")) {
+            if (nargs >= 1 && args[0] && args[0]->type == OBJ_ARRAYLIST &&
+                args[0]->arr_len > 0) {
+                AineObj *best = args[0]->arr_obj[0];
+                for (int i = 1; i < args[0]->arr_len; i++) {
+                    AineObj *it = args[0]->arr_obj[i];
+                    const char *a = best && best->str ? best->str : "";
+                    const char *b = it && it->str ? it->str : "";
+                    int cmp = strcmp(a, b);
+                    if ((!strcmp(method_name,"max") && cmp < 0) ||
+                        (!strcmp(method_name,"min") && cmp > 0)) best = it;
+                }
+                res.is_void = 0; res.obj = best; return res;
+            }
+        }
+        if (!strcmp(method_name, "frequency") || !strcmp(method_name, "nCopies")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+        return res;
+    }
+
+    // ── java.util.Arrays ─────────────────────────────────────────────────
+    if (strcmp(class_desc, "Ljava/util/Arrays;") == 0) {
+        if (!strcmp(method_name, "asList") && nargs >= 1) {
+            AineObj *list = heap_arraylist_new();
+            if (args[0] && args[0]->type == OBJ_ARRAY) {
+                for (int i = 0; i < args[0]->arr_len; i++)
+                    heap_arraylist_add(list, args[0]->arr_obj[i]);
+            } else {
+                for (int i = 0; i < nargs; i++)
+                    heap_arraylist_add(list, args[i]);
+            }
+            res.is_void = 0; res.obj = list; return res;
+        }
+        if (!strcmp(method_name, "sort") && nargs >= 1 && args[0] &&
+            args[0]->type == OBJ_ARRAY) {
+            /* Simple insertion sort */
+            AineObj *arr = args[0];
+            for (int i = 1; i < arr->arr_len; i++) {
+                int64_t kp = arr->arr_prim[i];
+                AineObj *ko = arr->arr_obj[i];
+                const char *ks = ko && ko->str ? ko->str : "";
+                int j = i - 1;
+                while (j >= 0) {
+                    const char *js = arr->arr_obj[j] && arr->arr_obj[j]->str
+                                     ? arr->arr_obj[j]->str : "";
+                    if (arr->arr_obj[j] ? strcmp(js,ks) <= 0
+                                        : arr->arr_prim[j] <= kp) break;
+                    arr->arr_prim[j+1] = arr->arr_prim[j];
+                    arr->arr_obj[j+1]  = arr->arr_obj[j];
+                    j--;
+                }
+                arr->arr_prim[j+1] = kp;
+                arr->arr_obj[j+1]  = ko;
+            }
+            return res;
+        }
+        if (!strcmp(method_name, "fill") && nargs >= 2) {
+            if (args[0] && args[0]->type == OBJ_ARRAY) {
+                for (int i = 0; i < args[0]->arr_len; i++) {
+                    args[0]->arr_obj[i]  = args[1];
+                    if (args[1] && args[1]->str)
+                        args[0]->arr_prim[i] = atoll(args[1]->str);
+                }
+            }
+            return res;
+        }
+        if ((!strcmp(method_name, "copyOf") || !strcmp(method_name, "copyOfRange"))
+            && nargs >= 2) {
+            AineObj *src = args[0];
+            int newlen = (args[1] && args[1]->str) ? atoi(args[1]->str) : 0;
+            AineObj *dst = heap_array_new(newlen);
+            if (src && src->type == OBJ_ARRAY) {
+                int cp = newlen < src->arr_len ? newlen : src->arr_len;
+                memcpy(dst->arr_prim, src->arr_prim, (size_t)cp * sizeof(int64_t));
+                memcpy(dst->arr_obj,  src->arr_obj,  (size_t)cp * sizeof(AineObj *));
+            }
+            res.is_void = 0; res.obj = dst; return res;
+        }
+        if (!strcmp(method_name, "toString") && nargs >= 1 && args[0] &&
+            args[0]->type == OBJ_ARRAY) {
+            char buf[512] = "["; int pos = 1;
+            for (int i = 0; i < args[0]->arr_len && pos < 500; i++) {
+                if (i > 0) buf[pos++] = ',';
+                AineObj *it = args[0]->arr_obj[i];
+                const char *sv = it && it->str ? it->str : "null";
+                int sl = (int)strlen(sv);
+                if (pos + sl < 500) { memcpy(buf+pos, sv, sl); pos += sl; }
+            }
+            buf[pos++] = ']'; buf[pos] = 0;
+            res.is_void = 0; res.obj = heap_string(buf); return res;
+        }
+        return res;
+    }
+
+    // ── java.lang.Boolean / Double / Float / Character ───────────────────
+    if (strcmp(class_desc, "Ljava/lang/Boolean;") == 0) {
+        if (!strcmp(method_name, "valueOf") && nargs >= 1) {
+            int bv = (args[0] && args[0]->str) ?
+                     (strcmp(args[0]->str,"true")==0 || strcmp(args[0]->str,"1")==0 ? 1 : atoi(args[0]->str))
+                     : 0;
+            res.is_void = 0; res.obj = heap_string(bv ? "true" : "false"); return res;
+        }
+        if (!strcmp(method_name, "booleanValue") || !strcmp(method_name, "parseBoolean")) {
+            const char *sv = this_obj && this_obj->str ? this_obj->str
+                           : (nargs>=1 && args[0] && args[0]->str ? args[0]->str : "false");
+            res.is_void = 0; res.prim = strcmp(sv,"true")==0||strcmp(sv,"1")==0?1:0;
+            return res;
+        }
+        if (!strcmp(method_name, "toString")) {
+            const char *sv = this_obj && this_obj->str ? this_obj->str : "false";
+            res.is_void = 0; res.obj = heap_string(sv); return res;
+        }
+    }
+    if (strcmp(class_desc, "Ljava/lang/Double;") == 0 ||
+        strcmp(class_desc, "Ljava/lang/Float;")  == 0) {
+        if (!strcmp(method_name, "parseDouble") || !strcmp(method_name, "parseFloat")) {
+            double v = (nargs>=1 && args[0] && args[0]->str) ? atof(args[0]->str) : 0.0;
+            res.is_void = 0; res.prim = (int64_t)v; return res;
+        }
+        if (!strcmp(method_name, "toString") || !strcmp(method_name, "valueOf")) {
+            res.is_void = 0; res.obj = nargs>=1 ? args[0] : this_obj; return res;
+        }
+        if (!strcmp(method_name, "doubleValue") || !strcmp(method_name, "floatValue")) {
+            const char *sv = this_obj && this_obj->str ? this_obj->str : "0";
+            res.is_void = 0; res.prim = (int64_t)atof(sv); return res;
+        }
+        if (!strcmp(method_name, "isNaN") || !strcmp(method_name, "isInfinite")) {
+            res.is_void = 0; res.prim = 0; return res;
+        }
+    }
+    if (strcmp(class_desc, "Ljava/lang/Character;") == 0) {
+        if (!strcmp(method_name, "isDigit") && nargs >= 1) {
+            int c = (args[0] && args[0]->str) ? (unsigned char)args[0]->str[0] : 0;
+            res.is_void = 0; res.prim = isdigit(c) ? 1 : 0; return res;
+        }
+        if (!strcmp(method_name, "isLetter") && nargs >= 1) {
+            int c = (args[0] && args[0]->str) ? (unsigned char)args[0]->str[0] : 0;
+            res.is_void = 0; res.prim = isalpha(c) ? 1 : 0; return res;
+        }
+        if (!strcmp(method_name, "isUpperCase") || !strcmp(method_name, "isLowerCase")) {
+            int c = (args[0] && args[0]->str) ? (unsigned char)args[0]->str[0] : 0;
+            res.is_void = 0;
+            res.prim = !strcmp(method_name,"isUpperCase") ? (isupper(c)?1:0) : (islower(c)?1:0);
+            return res;
+        }
+        if (!strcmp(method_name, "toUpperCase") || !strcmp(method_name, "toLowerCase")) {
+            int c = (args[0] && args[0]->str) ? (unsigned char)args[0]->str[0] : 0;
+            char buf[2] = { (char)(!strcmp(method_name,"toUpperCase") ? toupper(c) : tolower(c)), 0 };
+            res.is_void = 0; res.prim = buf[0]; return res;
+        }
+        if (!strcmp(method_name, "valueOf") && nargs >= 1) {
+            res.is_void = 0; res.obj = args[0]; return res;
+        }
+    }
+
+    // ── java.io.File ─────────────────────────────────────────────────────
+    if (strcmp(class_desc, "Ljava/io/File;") == 0) {
+        if (!strcmp(method_name, "<init>") && nargs >= 1) {
+            if (this_obj) {
+                const char *p = (args[0] && args[0]->str) ? args[0]->str : "/tmp";
+                heap_iput_obj(this_obj, "path", heap_string(p));
+            }
+            return res;
+        }
+        const char *path = "";
+        if (this_obj) {
+            AineObj *pv = heap_iget_obj(this_obj, "path");
+            if (pv && pv->str) path = pv->str;
+        }
+        if (!strcmp(method_name, "getPath") || !strcmp(method_name, "getAbsolutePath") ||
+            !strcmp(method_name, "toString")) {
+            res.is_void = 0; res.obj = heap_string(path); return res;
+        }
+        if (!strcmp(method_name, "getName")) {
+            const char *slash = strrchr(path, '/');
+            res.is_void = 0; res.obj = heap_string(slash ? slash+1 : path); return res;
+        }
+        if (!strcmp(method_name, "exists") || !strcmp(method_name, "isFile") ||
+            !strcmp(method_name, "isDirectory")) {
+            struct stat st;
+            int exists = stat(path, &st) == 0;
+            if (!strcmp(method_name, "isFile")) exists = exists && S_ISREG(st.st_mode);
+            if (!strcmp(method_name, "isDirectory")) exists = exists && S_ISDIR(st.st_mode);
+            res.is_void = 0; res.prim = exists ? 1 : 0; return res;
+        }
+        if (!strcmp(method_name, "mkdirs") || !strcmp(method_name, "mkdir")) {
+            res.is_void = 0; res.prim = mkdir(path, 0755) == 0 ? 1 : 0; return res;
+        }
+        if (!strcmp(method_name, "length")) {
+            struct stat st;
+            res.is_void = 0; res.prim = (stat(path,&st)==0) ? (int64_t)st.st_size : 0;
+            return res;
+        }
+        if (!strcmp(method_name, "delete")) {
+            res.is_void = 0; res.prim = remove(path) == 0 ? 1 : 0; return res;
+        }
+        if (!strcmp(method_name, "canRead") || !strcmp(method_name, "canWrite")) {
+            res.is_void = 0; res.prim = 1; return res;
+        }
+        return res;
+    }
+
+    // ── android.content.res.Resources ────────────────────────────────────
+    if (strstr(class_desc, "android/content/res/Resources")) {
+        if (!strcmp(method_name, "getString") || !strcmp(method_name, "getText")) {
+            res.is_void = 0; res.obj = heap_string(""); return res;
+        }
+        if (!strcmp(method_name, "getInteger")) { res.is_void = 0; res.prim = 0; return res; }
+        if (!strcmp(method_name, "getBoolean")) { res.is_void = 0; res.prim = 0; return res; }
+        if (!strcmp(method_name, "getIdentifier")) { res.is_void = 0; res.prim = 0; return res; }
+        return res;
+    }
+
+    // ── android.os.SystemClock ────────────────────────────────────────────
+    if (strstr(class_desc, "android/os/SystemClock")) {
+        if (!strcmp(method_name, "elapsedRealtime") ||
+            !strcmp(method_name, "uptimeMillis") ||
+            !strcmp(method_name, "currentThreadTimeMillis")) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            res.is_void = 0;
+            res.prim = (int64_t)ts.tv_sec*1000 + ts.tv_nsec/1000000;
+            return res;
+        }
+        if (!strcmp(method_name, "sleep") && nargs >= 1) {
+            int64_t ms = (args[0] && args[0]->str) ? atoll(args[0]->str) : 0;
+            if (ms > 0) {
+                struct timespec ts = { ms/1000, (ms%1000)*1000000L };
+                nanosleep(&ts, NULL);
+            }
+            return res;
+        }
+    }
+
+    // ── java.lang.Exception / RuntimeException / Error ───────────────────
+    if (strstr(class_desc, "java/lang/") &&
+        (strstr(class_desc, "Exception") || strstr(class_desc, "Error") ||
+         strstr(class_desc, "Throwable"))) {
+        if (!strcmp(method_name, "<init>")) {
+            if (this_obj && nargs >= 1 && args[0])
+                heap_iput_obj(this_obj, "message", args[0]);
+            return res;
+        }
+        if (!strcmp(method_name, "getMessage") || !strcmp(method_name, "toString")) {
+            AineObj *msg = this_obj ? heap_iget_obj(this_obj, "message") : NULL;
+            res.is_void = 0; res.obj = msg ? msg : heap_string(class_desc); return res;
+        }
+        if (!strcmp(method_name, "printStackTrace")) {
+            AineObj *msg = this_obj ? heap_iget_obj(this_obj, "message") : NULL;
+            fprintf(stderr, "[aine-dalvik] exception %s: %s\n", class_desc,
+                    msg && msg->str ? msg->str : "(no message)");
+            return res;
+        }
+        if (!strcmp(method_name, "getClass")) {
+            res.is_void = 0; res.obj = heap_string(class_desc); return res;
+        }
+        return res;
+    }
+
+    // ── Generic <init> fallback for all other unrecognized classes ───────
+    if (strcmp(method_name, "<init>") == 0) { res.is_void = 1; return res; }
+
+    // ── Class ───────────────────────────────────────────────────────────
+    if (strcmp(class_desc, "Ljava/lang/Class;") == 0) {
+        if (strcmp(method_name, "getName") == 0 || strcmp(method_name, "getSimpleName") == 0) {
+            res.is_void = 0; res.obj = heap_string(class_desc); return res;
+        }
+        if (strcmp(method_name, "forName") == 0 && nargs >= 1) {
+            res.is_void = 0; res.obj = args[0]; return res;
+        }
+    }
+
+    /* Generic <init> fallback — silently no-op for any unrecognized class */
+    if (strcmp(method_name, "<init>") == 0) { res.is_void = 1; return res; }
 
     fprintf(stderr, "[aine-dalvik] unimplemented: %s->%s (nargs=%d)\n",
             class_desc, method_name, nargs);

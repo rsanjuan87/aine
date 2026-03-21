@@ -107,3 +107,20 @@ const uint16_t *dex_insns(const DexCodeItem *ci);
 
 // ULEB128 decode helper
 uint32_t uleb128_decode(const uint8_t **ptr);
+
+// SLEB128 decode helper (signed)
+int32_t sleb128_decode(const uint8_t **ptr);
+
+// Try item — 8 bytes in the DEX catch-handler section
+typedef struct {
+    uint32_t start_addr;   /* first code unit of the try block */
+    uint16_t insn_count;   /* number of code units covered */
+    uint16_t handler_off;  /* byte offset into encoded_catch_handler_list */
+} DexTryItem;
+
+// Locate the catch-handler PC for a throw at throw_pc,
+// searching the try/catch table of code item ci.
+// exc_type: descriptor of exception class (e.g. "Ljava/lang/Exception;"), or NULL.
+// Returns handler PC (code units) on success, -1 if no handler found.
+int32_t dex_find_catch_handler(const DexFile *df, const DexCodeItem *ci,
+                                uint32_t throw_pc, const char *exc_type);

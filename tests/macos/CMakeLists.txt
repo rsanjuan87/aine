@@ -111,3 +111,36 @@ set_tests_properties(g2-stdlib PROPERTIES
     PASS_REGULAR_EXPRESSION "g2-done"
 )
 
+# G3: framework — try/catch, Thread.sleep, Iterator, String.split/replace, Collections.sort
+add_test(NAME g3-framework
+    COMMAND dalvikvm -cp "${CMAKE_SOURCE_DIR}/test-apps/G3Test/classes.dex" G3Test
+)
+set_tests_properties(g3-framework PROPERTIES
+    TIMEOUT 15
+    LABELS  "framework;g3;macos"
+    PASS_REGULAR_EXPRESSION "exc-caught.*sleep-ok.*iter:foo,bar,baz,.*split-len:4.*split-2:c.*replace:hello_world.*sort-0:apple.*g3-done"
+)
+
+# G4: advanced stdlib — Arrays.asList, Collections.reverse, String.replaceAll, Integer.MAX_VALUE
+add_test(NAME g4-stdlib2
+    COMMAND dalvikvm -cp "${CMAKE_SOURCE_DIR}/test-apps/G4Test/classes.dex" G4Test
+)
+set_tests_properties(g4-stdlib2 PROPERTIES
+    TIMEOUT 10
+    LABELS  "stdlib;g4;macos"
+    PASS_REGULAR_EXPRESSION "asList-size:3.*sorted:apple.*reversed:cherry.*replaceAll:hello-world-test.*max-val:2147483647.*g4-done"
+)
+
+# G5: NSWindow + Activity display — --window flag creates NSWindow (or skips gracefully
+#     on headless), runs full Activity lifecycle, closes window on completion.
+add_test(NAME g5-window-activity
+    COMMAND dalvikvm --window
+            -cp "${CMAKE_SOURCE_DIR}/test-apps/G5WindowTest/classes.dex"
+            G5WindowActivity
+)
+set_tests_properties(g5-window-activity PROPERTIES
+    TIMEOUT 30
+    LABELS  "window;g5;macos"
+    PASS_REGULAR_EXPRESSION "g5-window: onCreate.*g5-window: onResume.*g5-window: onDestroy.*g5-window: done"
+)
+

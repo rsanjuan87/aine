@@ -272,8 +272,21 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         }
 
         // ── 0x27 throw vAA  11x ──────────────────────────────────────────
-        case 0x27:
-            return 1;  // unwind; caller treats non-zero as exception
+        case 0x27: {
+            int vA = byte_hi(insn);
+            AineObj *exc = reg_obj(&regs[vA]);
+            const char *exc_type = (exc && exc->class_desc)  ? exc->class_desc
+                                 : (exc && exc->type == OBJ_STRING) ? "Ljava/lang/Exception;"
+                                 : "Ljava/lang/Exception;";
+            int32_t handler_pc = dex_find_catch_handler(interp->df, ci, pc, exc_type);
+            if (handler_pc >= 0) {
+                result_reg.kind = REG_OBJ; result_reg.obj = exc;
+                pc = (uint32_t)handler_pc;
+            } else {
+                return 1;  /* propagate up */
+            }
+            break;
+        }
 
         // ── 0x32..0x37 if-test vA, vB, +CCCC  22t ────────────────────────
         case 0x32: case 0x33: case 0x34: case 0x35: case 0x36: case 0x37: {
@@ -361,7 +374,9 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
                 if (!stored) stored = jni_sget_object(cls, fname);
                 reg_set_obj(&regs[vx], stored);
             } else {
-                reg_set_prim(&regs[vx], heap_sget_prim(cls, fname));
+                int64_t pv = heap_sget_prim(cls, fname);
+                if (pv == 0) pv = jni_sget_prim(cls, fname);
+                reg_set_prim(&regs[vx], pv);
             }
             pc += 2;
             break;
@@ -681,7 +696,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         }
         // ── 0x0d move-exception vAA ──────────────────────────────────
         case 0x0d:
-            memset(&regs[byte_hi(insn)], 0, sizeof(Reg));
+            regs[byte_hi(insn)] = result_reg;  /* result_reg holds the thrown exc */
             pc++; break;
 
         // ── 0x10 return-wide vAA ─────────────────────────────────────
