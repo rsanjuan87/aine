@@ -2101,6 +2101,27 @@ JniResult jni_dispatch(const char *class_desc,
         return res;  /* lifecycle no-ops for user Activity subclasses */
     }
 
+    /* Generic Activity-inherited methods for user subclasses (e.g. MyActivity extends Activity) */
+    if (!strcmp(method_name, "setContentView")) {
+        if (nargs >= 1 && args[0] && args[0]->type == OBJ_USERCLASS) {
+            g_content_view = args[0];
+            g_view_dirty   = 1;
+        }
+        return res;
+    }
+    if (!strcmp(method_name, "finish")) {
+        extern void aine_activity_request_finish(void);
+        aine_activity_request_finish(); return res;
+    }
+    if (!strcmp(method_name, "getWindow") || !strcmp(method_name, "getWindowManager") ||
+        !strcmp(method_name, "getSystemService")) {
+        res.is_void = 0; res.obj = this_obj; return res;
+    }
+    if (!strcmp(method_name, "requireViewById") || !strcmp(method_name, "findViewById")) {
+        AineObj *v = calloc(1, sizeof(AineObj)); v->type = OBJ_USERCLASS;
+        v->class_desc = "Landroid/view/View;"; res.is_void = 0; res.obj = v; return res;
+    }
+
     fprintf(stderr, "[aine-dalvik] unimplemented: %s->%s (nargs=%d)\n",
             class_desc, method_name, nargs);
     res.is_void = 0;

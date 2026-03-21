@@ -545,11 +545,9 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
     }                                                       \
 } while(0)
 
-        // add-int/sub-int/.../rem-long 23x: vAA, vBB, vCC
+        // ── Integer 23x: 0x90-0x9a  add-int through ushr-int ────────────────
         case 0x90: case 0x91: case 0x92: case 0x93: case 0x94:
-        case 0x95: case 0x96: case 0x97: case 0x98: case 0x99: case 0x9a:
-        case 0xa0: case 0xa1: case 0xa2: case 0xa3: case 0xa4:
-        case 0xa5: case 0xa6: case 0xa7: case 0xa8: case 0xa9: case 0xaa: {
+        case 0x95: case 0x96: case 0x97: case 0x98: case 0x99: case 0x9a: {
             int vA = (insn >> 8) & 0xff;
             int vB = insns[pc + 1] & 0xff;
             int vC = (insns[pc + 1] >> 8) & 0xff;
@@ -557,7 +555,68 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             pc += 2; break;
         }
 
-        // 2-addr forms: 0xb0..0xc5 12x: vA, vB (dest = vA op vB) — int/long
+        // ── Long 23x: 0x9b-0xa5  add-long through ushr-long ─────────────────
+        case 0x9b: case 0x9c: case 0x9d: case 0x9e: case 0x9f:
+        case 0xa0: case 0xa1: case 0xa2: case 0xa3: case 0xa4: case 0xa5: {
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;
+            int vC = (insns[pc + 1] >> 8) & 0xff;
+            int64_t a = reg_prim(&regs[vB]), b = reg_prim(&regs[vC]), r = 0;
+            switch (op) {
+                case 0x9b: r = a + b; break;
+                case 0x9c: r = a - b; break;
+                case 0x9d: r = a * b; break;
+                case 0x9e: r = b ? a / b : 0; break;
+                case 0x9f: r = b ? a % b : 0; break;
+                case 0xa0: r = a & b; break;
+                case 0xa1: r = a | b; break;
+                case 0xa2: r = a ^ b; break;
+                case 0xa3: r = a << (b & 63); break;
+                case 0xa4: r = a >> (b & 63); break;
+                case 0xa5: r = (int64_t)((uint64_t)a >> (b & 63)); break;
+            }
+            reg_set_prim(&regs[vA], r); pc += 2; break;
+        }
+
+        // ── Float 23x: 0xa6-0xaa  add/sub/mul/div/rem-float ─────────────────
+        case 0xa6: case 0xa7: case 0xa8: case 0xa9: case 0xaa: {
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;
+            int vC = (insns[pc + 1] >> 8) & 0xff;
+            float fa, fb; float fr = 0.0f;
+            uint32_t ua=(uint32_t)reg_prim(&regs[vB]), ub=(uint32_t)reg_prim(&regs[vC]);
+            memcpy(&fa,&ua,4); memcpy(&fb,&ub,4);
+            switch (op) {
+                case 0xa6: fr = fa + fb; break;
+                case 0xa7: fr = fa - fb; break;
+                case 0xa8: fr = fa * fb; break;
+                case 0xa9: fr = fb != 0.0f ? fa / fb : 0.0f; break;
+                case 0xaa: fr = fb != 0.0f ? fmodf(fa, fb) : 0.0f; break;
+            }
+            uint32_t ur; memcpy(&ur, &fr, 4);
+            reg_set_prim(&regs[vA], (int64_t)(uint32_t)ur); pc += 2; break;
+        }
+
+        // ── Double 23x: 0xab-0xaf  add/sub/mul/div/rem-double ───────────────
+        case 0xab: case 0xac: case 0xad: case 0xae: case 0xaf: {
+            int vA = (insn >> 8) & 0xff;
+            int vB = insns[pc + 1] & 0xff;
+            int vC = (insns[pc + 1] >> 8) & 0xff;
+            double da, db; double dr = 0.0;
+            int64_t ia=reg_prim(&regs[vB]), ib=reg_prim(&regs[vC]);
+            memcpy(&da,&ia,8); memcpy(&db,&ib,8);
+            switch (op) {
+                case 0xab: dr = da + db; break;
+                case 0xac: dr = da - db; break;
+                case 0xad: dr = da * db; break;
+                case 0xae: dr = db != 0.0 ? da / db : 0.0; break;
+                case 0xaf: dr = db != 0.0 ? fmod(da, db) : 0.0; break;
+            }
+            int64_t ur; memcpy(&ur, &dr, 8);
+            reg_set_prim(&regs[vA], ur); pc += 2; break;
+        }
+
+        // ── Int/long 2-addr: 0xb0-0xc5  12x: vA, vB (dest = vA op vB) ──────
         case 0xb0: case 0xb1: case 0xb2: case 0xb3: case 0xb4:
         case 0xb5: case 0xb6: case 0xb7: case 0xb8: case 0xb9: case 0xba:
         case 0xbb: case 0xbc: case 0xbd: case 0xbe: case 0xbf:
@@ -648,23 +707,48 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             pc += 2; break;
         }
 
-        // int-to-* / long-to-* conversions 0x81..0x8f 12x: vA, vB
+        // Type conversion opcodes 0x81..0x8f  12x: vA, vB
+        // All float/double conversions use memcpy to correctly handle IEEE 754 bit patterns.
         case 0x81: case 0x82: case 0x83: case 0x84: case 0x85:
-        case 0x86: case 0x87: case 0x88: case 0x8b: case 0x8c:
-        case 0x8d: case 0x8e: case 0x8f: {
+        case 0x86: case 0x87: case 0x88: case 0x89: case 0x8a:
+        case 0x8b: case 0x8c: case 0x8d: case 0x8e: case 0x8f: {
             int vA = (insn >> 8) & 0xf, vB = (insn >> 12) & 0xf;
             int64_t v = reg_prim(&regs[vB]);
             switch (op) {
                 case 0x81: reg_set_prim(&regs[vA], (int64_t)(int32_t)v); break; // int-to-long
-                case 0x82: reg_set_prim(&regs[vA], (int64_t)(float)(int32_t)v); break;
-                case 0x83: reg_set_prim(&regs[vA], (int64_t)(double)(int32_t)v); break;
+                case 0x82: { /* int-to-float: store IEEE 754 bits */
+                    float f = (float)(int32_t)v; uint32_t u; memcpy(&u,&f,4);
+                    reg_set_prim(&regs[vA], (int64_t)(uint32_t)u); break; }
+                case 0x83: { /* int-to-double */
+                    double d = (double)(int32_t)v; int64_t u; memcpy(&u,&d,8);
+                    reg_set_prim(&regs[vA], u); break; }
                 case 0x84: reg_set_prim(&regs[vA], (int32_t)(int64_t)v); break; // long-to-int
-                case 0x85: reg_set_prim(&regs[vA], (int64_t)(float)(int64_t)v); break;
-                case 0x86: reg_set_prim(&regs[vA], (int64_t)(double)(int64_t)v); break;
-                case 0x87: reg_set_prim(&regs[vA], (int64_t)(int32_t)(float)v); break; // float-to-int
-                case 0x88: reg_set_prim(&regs[vA], (int64_t)(int64_t)(float)v); break; // float-to-long
-                case 0x8b: reg_set_prim(&regs[vA], (int64_t)(int32_t)(double)v); break; // double-to-int
-                case 0x8c: reg_set_prim(&regs[vA], (int64_t)(double)v); break;
+                case 0x85: { /* long-to-float */
+                    float f = (float)(int64_t)v; uint32_t u; memcpy(&u,&f,4);
+                    reg_set_prim(&regs[vA], (int64_t)(uint32_t)u); break; }
+                case 0x86: { /* long-to-double */
+                    double d = (double)(int64_t)v; int64_t u; memcpy(&u,&d,8);
+                    reg_set_prim(&regs[vA], u); break; }
+                case 0x87: { /* float-to-int */
+                    float f; uint32_t bits=(uint32_t)v; memcpy(&f,&bits,4);
+                    reg_set_prim(&regs[vA], (int64_t)(int32_t)f); break; }
+                case 0x88: { /* float-to-long */
+                    float f; uint32_t bits=(uint32_t)v; memcpy(&f,&bits,4);
+                    reg_set_prim(&regs[vA], (int64_t)f); break; }
+                case 0x89: { /* float-to-double */
+                    float f; uint32_t bits=(uint32_t)v; memcpy(&f,&bits,4);
+                    double d=(double)f; int64_t du; memcpy(&du,&d,8);
+                    reg_set_prim(&regs[vA], du); break; }
+                case 0x8a: { /* double-to-int */
+                    double d; memcpy(&d,&v,8);
+                    reg_set_prim(&regs[vA], (int64_t)(int32_t)d); break; }
+                case 0x8b: { /* double-to-long */
+                    double d; memcpy(&d,&v,8);
+                    reg_set_prim(&regs[vA], (int64_t)d); break; }
+                case 0x8c: { /* double-to-float */
+                    double d; memcpy(&d,&v,8); float f=(float)d;
+                    uint32_t u; memcpy(&u,&f,4);
+                    reg_set_prim(&regs[vA], (int64_t)(uint32_t)u); break; }
                 case 0x8d: reg_set_prim(&regs[vA], (int32_t)(int8_t)v); break;  // int-to-byte
                 case 0x8e: reg_set_prim(&regs[vA], (int32_t)(uint16_t)v); break;// int-to-char
                 case 0x8f: reg_set_prim(&regs[vA], (int32_t)(int16_t)v); break; // int-to-short
