@@ -1,3 +1,5 @@
+![logo](https://rsanjuan87.github.io/aine/aine-logo.svg)
+
 # AINE — Aine Is No Emulator
 
 > Capa de compatibilidad para ejecutar apps Android (AOSP/FOSS) en macOS de forma nativa, sin emulación de CPU.
