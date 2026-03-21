@@ -1,4 +1,4 @@
-![logo](https://rsanjuan87.github.io/aine/aine-logo.svg)
+<img src="https://rsanjuan87.github.io/aine/aine-logo.svg" height="150"/>
 
 # AINE — Aine Is No Emulator
 
