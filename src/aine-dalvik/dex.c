@@ -120,10 +120,12 @@ static const DexFieldId *field_id(const DexFile *df, uint32_t idx) {
 }
 
 const char *dex_field_name(const DexFile *df, uint32_t fidx) {
+    if (fidx >= df->hdr->field_ids_size) return NULL;
     return dex_string(df, field_id(df, fidx)->name_idx);
 }
 
 const char *dex_field_class(const DexFile *df, uint32_t fidx) {
+    if (fidx >= df->hdr->field_ids_size) return NULL;
     return dex_type_name(df, field_id(df, fidx)->class_idx);
 }
 
@@ -133,10 +135,12 @@ static const DexMethodId *method_id(const DexFile *df, uint32_t idx) {
 }
 
 const char *dex_method_name(const DexFile *df, uint32_t midx) {
+    if (midx >= df->hdr->method_ids_size) return NULL;
     return dex_string(df, method_id(df, midx)->name_idx);
 }
 
 const char *dex_method_class(const DexFile *df, uint32_t midx) {
+    if (midx >= df->hdr->method_ids_size) return NULL;
     return dex_type_name(df, method_id(df, midx)->class_idx);
 }
 
@@ -207,14 +211,20 @@ static int decode_class_methods(const DexFile *df, const DexClassDef *cdef,
 }
 
 int dex_find_method(const DexFile *df, int class_def_idx,
-                    const char *name, const char *descriptor) {
+                    const char *name, const char *descriptor, int start_idx) {
     const DexClassDef *cdef =
         (const DexClassDef *)(df->data + df->hdr->class_defs_off) + class_def_idx;
 
     DexEncodedMethod methods[256];
     int n = decode_class_methods(df, cdef, methods, 256);
-    for (int i = 0; i < n; i++) {
-        if (strcmp(dex_method_name(df, methods[i].method_idx), name) == 0)
+    for (int i = (start_idx > 0 ? start_idx : 0); i < n; i++) {
+        /* Skip bridge methods (ACC_BRIDGE = 0x40) — they are compiler-generated
+         * adapters that delegate to the real implementation. Executing them
+         * first causes infinite recursion (bridge calls impl, impl matches
+         * bridge again by name+ins_size). */
+        if (methods[i].access_flags & 0x40) continue;
+        const char *mname = dex_method_name(df, methods[i].method_idx);
+        if (mname && strcmp(mname, name) == 0)
             return i;   // local method index
     }
     (void)descriptor;
@@ -230,7 +240,12 @@ const DexCodeItem *dex_code_item(const DexFile *df, int class_def_idx, int metho
     if (method_local_idx < 0 || method_local_idx >= n) return NULL;
     uint32_t off = methods[method_local_idx].code_off;
     if (off == 0) return NULL;
-    return (const DexCodeItem *)(df->data + off);
+    /* Ensure the code item header fits within the mapped file */
+    if ((size_t)off + sizeof(DexCodeItem) > df->size) return NULL;
+    const DexCodeItem *ci = (const DexCodeItem *)(df->data + off);
+    /* Ensure the instructions array fits within the mapped file */
+    if ((size_t)off + sizeof(DexCodeItem) + (size_t)ci->insns_size * 2 > df->size) return NULL;
+    return ci;
 }
 
 const uint16_t *dex_insns(const DexCodeItem *ci) {

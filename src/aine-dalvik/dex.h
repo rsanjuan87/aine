@@ -99,7 +99,7 @@ int dex_find_class(const DexFile *df, const char *descriptor); // returns class_
 // Superclass descriptor of a DEX class (NULL if java/lang/Object or not in DEX)
 const char *dex_class_super(const DexFile *df, int class_def_idx);
 // Method lookup within a class_def
-int dex_find_method(const DexFile *df, int class_def_idx, const char *name, const char *descriptor);
+int dex_find_method(const DexFile *df, int class_def_idx, const char *name, const char *descriptor, int start_idx);
 
 // Get code item for a method (returns NULL if abstract/native)
 const DexCodeItem *dex_code_item(const DexFile *df, int class_def_idx, int method_local_idx);

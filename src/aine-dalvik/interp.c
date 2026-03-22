@@ -24,6 +24,24 @@
 #include <time.h>    /* clock_gettime, nanosleep */
 #include <stdint.h>
 #include <math.h>    /* fmodf, fmod */
+#include <signal.h>
+
+/* crash ring buffer — records last 16 (pc, op, df) entries */
+#define CRASH_RING 16
+static struct { uint32_t pc; uint8_t op; const void *df; } g_crash_ring[CRASH_RING];
+static volatile int g_crash_idx = 0;
+
+static void crash_handler(int sig) {
+    fprintf(stderr, "\n[aine-dalvik] SIGNAL %d — last opcodes:\n", sig);
+    for (int i = 0; i < CRASH_RING; i++) {
+        int idx = (g_crash_idx + i) % CRASH_RING;
+        fprintf(stderr, "  pc=%u op=0x%02x df=%p\n",
+                g_crash_ring[idx].pc, g_crash_ring[idx].op, g_crash_ring[idx].df);
+    }
+    fflush(stderr);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
 
 // ── Register ────────────────────────────────────────────────────────────
 typedef enum { REG_PRIM, REG_OBJ } RegKind;
@@ -60,6 +78,8 @@ struct AineInterp {
 };
 
 AineInterp *interp_new(const DexFile *df) {
+    signal(SIGSEGV, crash_handler);
+    signal(SIGBUS,  crash_handler);
     AineInterp *i = calloc(1, sizeof(AineInterp));
     i->df = i->cur_df = df;
     return i;
@@ -80,6 +100,25 @@ static inline int byte_hi(uint16_t w) { return (w >> 8) & 0xff; }
 static int exec_code(AineInterp *interp, const DexCodeItem *ci,
                      Reg *in_regs, int in_count, Reg *result_out);
 
+// ── Helper: is class_desc an Android/Java/Kotlin framework class? ─────────────
+// Framework classes are handled by JNI stubs, not by executing DEX code.
+// This prevents the interpreter from recursing into the full Android framework
+// (AppCompatActivity, LifecycleRegistry, etc.) bundled in the Kotlin DEX.
+static int is_framework_class(const char *desc) {
+    if (!desc) return 1;
+    return (strncmp(desc, "Landroid/",  9)  == 0 ||
+            strncmp(desc, "Landroidx/", 10) == 0 ||
+            strncmp(desc, "Ljava/",      6) == 0 ||
+            strncmp(desc, "Ljavax/",     7) == 0 ||
+            strncmp(desc, "Lkotlin/",    8) == 0 ||
+            strncmp(desc, "Lkotlinx/",   9) == 0 ||
+            strncmp(desc, "Lcom/google/", 12) == 0 ||
+            strncmp(desc, "Lorg/json/",  10) == 0 ||
+            strncmp(desc, "Lorg/apache/", 12) == 0 ||
+            strncmp(desc, "Ldalvik/",     8) == 0 ||
+            strncmp(desc, "Lsun/",        5) == 0);
+}
+
 // ── Method dispatch: try DEX first, fall back to JNI ─────────────────────────
 // all_args[0..all_count-1] = this (if instance) then explicit args.
 static void exec_method(AineInterp *interp,
@@ -87,8 +126,13 @@ static void exec_method(AineInterp *interp,
                         Reg *all_args, int all_count, int is_static,
                         Reg *result_out) {
     if (result_out) { result_out->kind = REG_PRIM; result_out->prim = 0; }
+    if (!class_desc || !method_name) return;  /* nothing useful to dispatch */
 
-    /* Try all loaded DEX files: primary first, then extras in order. */
+    /* Try all loaded DEX files: primary first, then extras in order.
+     * Skip framework classes — they are handled by JNI stubs. Executing their
+     * DEX code would recurse into the full Android framework (AppCompatActivity,
+     * LifecycleRegistry…) which we don't support. */
+    if (!is_framework_class(class_desc)) {
     int total_dfs = 1 + interp->n_extra_dfs;
     for (int dfi = 0; dfi < total_dfs; dfi++) {
         const DexFile *df = (dfi == 0) ? interp->df : interp->extra_dfs[dfi - 1];
@@ -96,19 +140,25 @@ static void exec_method(AineInterp *interp,
         if (cdef < 0) continue;                   /* not in this DEX, try next */
         int at = cdef;
         while (at >= 0) {
-            int midx = dex_find_method(df, at, method_name, NULL);
-            if (midx >= 0) {
+            int midx = dex_find_method(df, at, method_name, NULL, 0);
+            while (midx >= 0) {
                 const DexCodeItem *ci = dex_code_item(df, at, midx);
                 if (ci) {
-                    /* Switch cur_df so constant-pool lookups resolve correctly */
-                    const DexFile *saved_df = interp->cur_df;
-                    interp->cur_df = df;
-                    exec_code(interp, ci, all_args, all_count, result_out);
-                    interp->cur_df = saved_df;
-                    return;
+                    if ((int)ci->ins_size == all_count) {
+                        /* Correct overload — execute it */
+                        const DexFile *saved_df = interp->cur_df;
+                        interp->cur_df = df;
+                        exec_code(interp, ci, all_args, all_count, result_out);
+                        interp->cur_df = saved_df;
+                        return;
+                    }
+                    /* Wrong parameter count — try next overload with same name */
+                    midx = dex_find_method(df, at, method_name, NULL, midx + 1);
+                } else {
+                    goto jni_fallthrough;  /* abstract/native → JNI */
                 }
-                goto jni_fallthrough;              /* abstract/native → JNI */
             }
+            /* No matching overload in this class — climb super hierarchy */
             const char *super = dex_class_super(df, at);
             if (!super) break;
             at = dex_find_class(df, super);
@@ -116,6 +166,7 @@ static void exec_method(AineInterp *interp,
         /* Class found but method not in hierarchy — fall through to JNI */
         goto jni_fallthrough;
     }
+    } /* end !is_framework_class */
     jni_fallthrough:;
     // JNI
     AineObj *this_obj = NULL;
@@ -162,19 +213,30 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
     if (N > MAX_REGS) { fprintf(stderr, "[aine-dalvik] registers_size=%d\n", N); return -1; }
 
     Reg regs[MAX_REGS];
-    memset(regs, 0, sizeof(Reg) * (size_t)N);
+    memset(regs, 0, sizeof(regs));   /* zero full array — prevents use of stale stack slots */
 
     // Incoming args → last ins_size registers
     int ins = (int)ci->ins_size;
     int base = N - ins;
-    for (int i = 0; i < in_count && i < ins; i++) regs[base + i] = in_regs[i];
+    if (base < 0) base = 0;   /* guard: registers_size must be >= ins_size; clamp if not */
+    for (int i = 0; i < in_count && i < ins && (base + i) < N; i++) regs[base + i] = in_regs[i];
 
     Reg result_reg = {0};
     uint32_t pc = 0;
+    const uint32_t insns_limit = ci->insns_size;
 
     while (1) {
+        if (pc >= insns_limit) {
+            fprintf(stderr, "[aine-dalvik] pc=%u out of bounds (insns_size=%u) — returning\n",
+                    pc, insns_limit);
+            return -1;
+        }
         uint16_t insn = insns[pc];
         uint8_t  op   = insn & 0xff;
+        /* Update crash ring buffer */
+        { int ci2 = g_crash_idx;
+          g_crash_ring[ci2].pc = pc; g_crash_ring[ci2].op = op; g_crash_ring[ci2].df = interp->cur_df;
+          g_crash_idx = (ci2 + 1) % CRASH_RING; }
 
         switch (op) {
 
@@ -377,10 +439,10 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             const char *fname = dex_field_name(interp->cur_df, fidx);
             AineObj *obj = reg_obj(&regs[vB]);
             if (op == 0x54) {  /* iget-object only (0x58=iget-short is prim) */
-                AineObj *val = obj ? heap_iget_obj(obj, fname) : NULL;
+                AineObj *val = (obj && fname) ? heap_iget_obj(obj, fname) : NULL;
                 reg_set_obj(&regs[vA], val);
             } else {
-                int64_t val = obj ? heap_iget_prim(obj, fname) : 0;
+                int64_t val = (obj && fname) ? heap_iget_prim(obj, fname) : 0;
                 reg_set_prim(&regs[vA], val);
             }
             pc += 2; break;
@@ -394,10 +456,12 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             uint16_t fidx = insns[pc + 1];
             const char *fname = dex_field_name(interp->cur_df, fidx);
             AineObj *obj = reg_obj(&regs[vB]);
-            if (op == 0x5b) {  /* iput-object only (0x5f=iput-short is prim) */
-                if (obj) heap_iput_obj(obj, fname, reg_obj(&regs[vA]));
-            } else {
-                if (obj) heap_iput_prim(obj, fname, reg_prim(&regs[vA]));
+            if (fname) {
+                if (op == 0x5b) {  /* iput-object */
+                    if (obj) heap_iput_obj(obj, fname, reg_obj(&regs[vA]));
+                } else {
+                    if (obj) heap_iput_prim(obj, fname, reg_prim(&regs[vA]));
+                }
             }
             pc += 2; break;
         }
@@ -410,14 +474,19 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             uint16_t fidx = insns[pc + 1];
             const char *cls   = dex_field_class(interp->cur_df, fidx);
             const char *fname = dex_field_name(interp->cur_df, fidx);
-            if (op == 0x62) {  /* sget-object */
-                AineObj *stored = heap_sget_obj(cls, fname);
-                if (!stored) stored = jni_sget_object(cls, fname);
-                reg_set_obj(&regs[vx], stored);
+            if (cls && fname) {
+                if (op == 0x62) {  /* sget-object */
+                    AineObj *stored = heap_sget_obj(cls, fname);
+                    if (!stored) stored = jni_sget_object(cls, fname);
+                    reg_set_obj(&regs[vx], stored);
+                } else {
+                    int64_t pv = heap_sget_prim(cls, fname);
+                    if (pv == 0) pv = jni_sget_prim(cls, fname);
+                    reg_set_prim(&regs[vx], pv);
+                }
             } else {
-                int64_t pv = heap_sget_prim(cls, fname);
-                if (pv == 0) pv = jni_sget_prim(cls, fname);
-                reg_set_prim(&regs[vx], pv);
+                if (op == 0x62) reg_set_obj(&regs[vx], NULL);
+                else            reg_set_prim(&regs[vx], 0);
             }
             pc += 2;
             break;
@@ -428,7 +497,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             uint16_t fidx2 = insns[pc + 1];
             const char *cls2   = dex_field_class(interp->cur_df, fidx2);
             const char *fname2 = dex_field_name(interp->cur_df, fidx2);
-            reg_set_prim(&regs[vx], heap_sget_prim(cls2, fname2));
+            reg_set_prim(&regs[vx], (cls2 && fname2) ? heap_sget_prim(cls2, fname2) : 0);
             pc += 2; break;
         }
         // 0x68..0x6d sput-* 21c: field@BBBB, vAA
@@ -438,10 +507,9 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             uint16_t fidx3 = insns[pc + 1];
             const char *cls3   = dex_field_class(interp->cur_df, fidx3);
             const char *fname3 = dex_field_name(interp->cur_df, fidx3);
-            if (op == 0x6a) {  /* sput-object */
-                heap_sput_obj(cls3, fname3, reg_obj(&regs[vx3]));
-            } else {
-                heap_sput_prim(cls3, fname3, reg_prim(&regs[vx3]));
+            if (cls3 && fname3) {
+                if (op == 0x6a) heap_sput_obj(cls3, fname3, reg_obj(&regs[vx3]));
+                else            heap_sput_prim(cls3, fname3, reg_prim(&regs[vx3]));
             }
             pc += 2; break;
         }
@@ -1249,7 +1317,7 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor) {
     interp->cur_df = found_df;   /* set for initial method dispatch */
 
     int method_idx = dex_find_method(found_df, cdef_idx,
-                                     "main", "([Ljava/lang/String;)V");
+                                     "main", "([Ljava/lang/String;)V", 0);
     if (method_idx < 0) {
         /* No main() — try Activity lifecycle mode (onCreate → … → onDestroy) */
         fprintf(stderr, "[aine-dalvik] Activity mode: %s\n", class_descriptor);
@@ -1261,8 +1329,10 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor) {
         Reg two_regs[2]; two_regs[0] = this_reg; two_regs[1] = null_reg;
 
         /* <init>()V */
+        fprintf(stderr, "[aine-dalvik] calling <init>\n");
         exec_method(interp, class_descriptor, "<init>", &this_reg, 1, 0, NULL);
         /* onCreate(Bundle)V — pass null bundle */
+        fprintf(stderr, "[aine-dalvik] calling onCreate\n");
         exec_method(interp, class_descriptor, "onCreate", two_regs, 2, 0, NULL);
         /* onStart()V */
         exec_method(interp, class_descriptor, "onStart", &this_reg, 1, 0, NULL);
