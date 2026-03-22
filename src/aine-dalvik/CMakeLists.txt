@@ -8,6 +8,7 @@ set(DALVIK_SOURCES
     dex.c
     heap.c
     jni.c
+    layout.c
     handler.c
     interp.c
     main.c

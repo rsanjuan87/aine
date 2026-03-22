@@ -27,3 +27,7 @@ void interp_set_max_frames(int n);
 // No-op if runnable is NULL or has no class_desc.
 void interp_run_runnable(AineInterp *interp, AineObj *runnable);
 
+// Register an additional DEX file with the interpreter (multi-DEX APKs).
+// Class lookups try the primary DEX first, then extras in registration order.
+void interp_add_dex(AineInterp *interp, const DexFile *df);
+

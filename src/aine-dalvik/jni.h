@@ -37,3 +37,12 @@ struct AineObj;
 struct AineObj *jni_get_content_view(void);
 int             jni_pop_invalidated(void);
 
+/* Resource directory and XML layout root (set after companion file loaded).
+ * Call jni_set_res_dir() before running the app; returns 1 if res loaded.   */
+#include "layout.h"
+int          jni_set_res_dir(const char *dir);  /* loads aine-res.txt        */
+AineViewNode *jni_get_layout_root(void);        /* NULL if no XML layout set */
+
+/* View-stub registry: find the AineObj* stub returned by findViewById().    */
+struct AineObj *jni_get_view_stub(int res_id);
+

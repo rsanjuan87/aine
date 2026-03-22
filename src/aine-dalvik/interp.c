@@ -13,6 +13,7 @@
 #include "heap.h"
 #include "jni.h"
 #include "handler.h"
+#include "layout.h"
 #ifdef __APPLE__
 #include "canvas.h"
 #endif
@@ -49,17 +50,28 @@ static inline int64_t reg_prim(const Reg *r) {
 }
 
 // ── Interpreter context ──────────────────────────────────────────────────
+#define INTERP_MAX_EXTRA_DEX 8
+
 struct AineInterp {
-    const DexFile *df;
+    const DexFile *df;       /* primary DEX (constant after init) */
+    const DexFile *cur_df;   /* DEX currently being executed (changes per dispatch) */
+    const DexFile *extra_dfs[INTERP_MAX_EXTRA_DEX];
+    int            n_extra_dfs;
 };
 
 AineInterp *interp_new(const DexFile *df) {
     AineInterp *i = calloc(1, sizeof(AineInterp));
-    i->df = df;
+    i->df = i->cur_df = df;
     return i;
 }
 
 void interp_free(AineInterp *interp) { free(interp); }
+
+void interp_add_dex(AineInterp *interp, const DexFile *df) {
+    if (!interp || !df) return;
+    if (interp->n_extra_dfs < INTERP_MAX_EXTRA_DEX)
+        interp->extra_dfs[interp->n_extra_dfs++] = df;
+}
 
 // ── Decode helpers ─────────────────────────────────────────────────────────
 static inline int byte_hi(uint16_t w) { return (w >> 8) & 0xff; }
@@ -75,24 +87,34 @@ static void exec_method(AineInterp *interp,
                         Reg *all_args, int all_count, int is_static,
                         Reg *result_out) {
     if (result_out) { result_out->kind = REG_PRIM; result_out->prim = 0; }
-    // Try DEX — walk the superclass chain within this DEX file
-    int cdef = dex_find_class(interp->df, class_desc);
-    if (cdef >= 0) {
+
+    /* Try all loaded DEX files: primary first, then extras in order. */
+    int total_dfs = 1 + interp->n_extra_dfs;
+    for (int dfi = 0; dfi < total_dfs; dfi++) {
+        const DexFile *df = (dfi == 0) ? interp->df : interp->extra_dfs[dfi - 1];
+        int cdef = dex_find_class(df, class_desc);
+        if (cdef < 0) continue;                   /* not in this DEX, try next */
         int at = cdef;
         while (at >= 0) {
-            int midx = dex_find_method(interp->df, at, method_name, NULL);
+            int midx = dex_find_method(df, at, method_name, NULL);
             if (midx >= 0) {
-                const DexCodeItem *ci = dex_code_item(interp->df, at, midx);
-                if (ci) { exec_code(interp, ci, all_args, all_count, result_out); return; }
-                /* Found abstract/native — fall out to JNI */
-                goto jni_fallthrough;
+                const DexCodeItem *ci = dex_code_item(df, at, midx);
+                if (ci) {
+                    /* Switch cur_df so constant-pool lookups resolve correctly */
+                    const DexFile *saved_df = interp->cur_df;
+                    interp->cur_df = df;
+                    exec_code(interp, ci, all_args, all_count, result_out);
+                    interp->cur_df = saved_df;
+                    return;
+                }
+                goto jni_fallthrough;              /* abstract/native → JNI */
             }
-            /* Method not in this class: try DEX superclass */
-            const char *super = dex_class_super(interp->df, at);
+            const char *super = dex_class_super(df, at);
             if (!super) break;
-            at = dex_find_class(interp->df, super);
+            at = dex_find_class(df, super);
         }
-        /* Not found in DEX hierarchy — fall through to JNI */
+        /* Class found but method not in hierarchy — fall through to JNI */
+        goto jni_fallthrough;
     }
     jni_fallthrough:;
     // JNI
@@ -244,7 +266,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         case 0x1a: {
             int vx = byte_hi(insn);
             uint16_t sidx = insns[pc + 1];
-            const char *s = dex_string(interp->df, sidx);
+            const char *s = dex_string(interp->cur_df, sidx);
             reg_set_obj(&regs[vx], heap_string(s));
             pc += 2;
             break;
@@ -254,7 +276,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         case 0x1b: {
             int vx = byte_hi(insn);
             uint32_t sidx = (uint32_t)insns[pc+1] | ((uint32_t)insns[pc+2] << 16);
-            const char *s = dex_string(interp->df, sidx);
+            const char *s = dex_string(interp->cur_df, sidx);
             reg_set_obj(&regs[vx], heap_string(s));
             pc += 3;
             break;
@@ -263,7 +285,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         // ── 0x22 new-instance vx, type@CCCC  21c ────────────────────
         case 0x22: {
             int vx = byte_hi(insn);
-            const char *type = dex_type_name(interp->df, insns[pc + 1]);
+            const char *type = dex_type_name(interp->cur_df, insns[pc + 1]);
             AineObj *obj = NULL;
             if (type) {
                 if (strcmp(type, "Ljava/lang/StringBuilder;") == 0) {
@@ -276,7 +298,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
                            strcmp(type, "Ljava/util/TreeMap;") == 0) {
                     obj = heap_hashmap_new();
                     obj->class_desc = type;                } else {
-                    int cd = dex_find_class(interp->df, type);
+                    int cd = dex_find_class(interp->cur_df, type);
                     obj = (cd >= 0) ? heap_userclass(cd)
                                     : (AineObj *)calloc(1, sizeof(AineObj));
                     if (obj) obj->class_desc = type;  /* for Runnable dispatch */
@@ -294,7 +316,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             const char *exc_type = (exc && exc->class_desc)  ? exc->class_desc
                                  : (exc && exc->type == OBJ_STRING) ? "Ljava/lang/Exception;"
                                  : "Ljava/lang/Exception;";
-            int32_t handler_pc = dex_find_catch_handler(interp->df, ci, pc, exc_type);
+            int32_t handler_pc = dex_find_catch_handler(interp->cur_df, ci, pc, exc_type);
             if (handler_pc >= 0) {
                 result_reg.kind = REG_OBJ; result_reg.obj = exc;
                 pc = (uint32_t)handler_pc;
@@ -352,7 +374,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             int vA = (insn >> 8) & 0xf;
             int vB = (insn >> 12) & 0xf;
             uint16_t fidx = insns[pc + 1];
-            const char *fname = dex_field_name(interp->df, fidx);
+            const char *fname = dex_field_name(interp->cur_df, fidx);
             AineObj *obj = reg_obj(&regs[vB]);
             if (op == 0x54) {  /* iget-object only (0x58=iget-short is prim) */
                 AineObj *val = obj ? heap_iget_obj(obj, fname) : NULL;
@@ -370,7 +392,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             int vA = (insn >> 8) & 0xf;
             int vB = (insn >> 12) & 0xf;
             uint16_t fidx = insns[pc + 1];
-            const char *fname = dex_field_name(interp->df, fidx);
+            const char *fname = dex_field_name(interp->cur_df, fidx);
             AineObj *obj = reg_obj(&regs[vB]);
             if (op == 0x5b) {  /* iput-object only (0x5f=iput-short is prim) */
                 if (obj) heap_iput_obj(obj, fname, reg_obj(&regs[vA]));
@@ -386,8 +408,8 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         case 0x64: case 0x65: {
             int vx = byte_hi(insn);
             uint16_t fidx = insns[pc + 1];
-            const char *cls   = dex_field_class(interp->df, fidx);
-            const char *fname = dex_field_name(interp->df, fidx);
+            const char *cls   = dex_field_class(interp->cur_df, fidx);
+            const char *fname = dex_field_name(interp->cur_df, fidx);
             if (op == 0x62) {  /* sget-object */
                 AineObj *stored = heap_sget_obj(cls, fname);
                 if (!stored) stored = jni_sget_object(cls, fname);
@@ -404,8 +426,8 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         case 0x66: case 0x67: {
             int vx = (insn >> 8) & 0xff;
             uint16_t fidx2 = insns[pc + 1];
-            const char *cls2   = dex_field_class(interp->df, fidx2);
-            const char *fname2 = dex_field_name(interp->df, fidx2);
+            const char *cls2   = dex_field_class(interp->cur_df, fidx2);
+            const char *fname2 = dex_field_name(interp->cur_df, fidx2);
             reg_set_prim(&regs[vx], heap_sget_prim(cls2, fname2));
             pc += 2; break;
         }
@@ -414,8 +436,8 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         case 0x6c: case 0x6d: {
             int vx3 = byte_hi(insn);
             uint16_t fidx3 = insns[pc + 1];
-            const char *cls3   = dex_field_class(interp->df, fidx3);
-            const char *fname3 = dex_field_name(interp->df, fidx3);
+            const char *cls3   = dex_field_class(interp->cur_df, fidx3);
+            const char *fname3 = dex_field_name(interp->cur_df, fidx3);
             if (op == 0x6a) {  /* sput-object */
                 heap_sput_obj(cls3, fname3, reg_obj(&regs[vx3]));
             } else {
@@ -441,8 +463,8 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             int arg_regs[5];
             int ac = decode_35c(insn, insns[pc + 2], arg_regs);
             uint16_t midx = insns[pc + 1];
-            const char *cls  = dex_method_class(interp->df, midx);
-            const char *name = dex_method_name(interp->df, midx);
+            const char *cls  = dex_method_class(interp->cur_df, midx);
+            const char *name = dex_method_name(interp->cur_df, midx);
             int is_static    = (op == 0x71);
             Reg all_args[5];
             for (int i = 0; i < ac && i < 5; i++) all_args[i] = regs[arg_regs[i]];
@@ -456,8 +478,8 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
             int ac       = (insn >> 8) & 0xff;
             uint16_t midx = insns[pc + 1];
             int base_reg  = insns[pc + 2];
-            const char *cls  = dex_method_class(interp->df, midx);
-            const char *name = dex_method_name(interp->df, midx);
+            const char *cls  = dex_method_class(interp->cur_df, midx);
+            const char *name = dex_method_name(interp->cur_df, midx);
             int is_static = (op == 0x77);
             Reg all_args[256];
             for (int i = 0; i < ac && i < 256 && (base_reg + i) < N; i++)
@@ -848,7 +870,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         // ── 0x1c const-class vAA, type@BBBB 21c ─────────────────────
         case 0x1c: {
             int vx = byte_hi(insn);
-            const char *type = dex_type_name(interp->df, insns[pc + 1]);
+            const char *type = dex_type_name(interp->cur_df, insns[pc + 1]);
             reg_set_obj(&regs[vx], heap_string(type ? type : ""));
             pc += 2; break;
         }
@@ -860,7 +882,7 @@ static int exec_code(AineInterp *interp, const DexCodeItem *ci,
         case 0x20: {
             int vA = (insn >> 8) & 0xf;
             int vB = (insn >> 12) & 0xf;
-            const char *type = dex_type_name(interp->df, insns[pc + 1]);
+            const char *type = dex_type_name(interp->cur_df, insns[pc + 1]);
             AineObj *obj = reg_obj(&regs[vB]);
             int r = 0;
             if (obj && type) {
@@ -1088,6 +1110,31 @@ static int dispatch_input_events(AineInterp *interp,
             heap_iput_prim(me, "x", cx.i);
             heap_iput_prim(me, "y", cy.i);
 
+            /* Layout click dispatch: on ACTION_UP, hit-test the view tree */
+            if (ev.motion.action == 1 /* AMOTION_EVENT_ACTION_UP */) {
+                AineViewNode *layout_root = jni_get_layout_root();
+                if (layout_root) {
+                    AineViewNode *hit = aine_layout_hit_test(
+                        layout_root, ev.motion.x, ev.motion.y);
+                    if (hit && hit->res_id) {
+                        AineObj *stub = jni_get_view_stub(hit->res_id);
+                        if (stub) {
+                            AineObj *listener = heap_iget_obj(stub, "onClick");
+                            if (listener && listener->class_desc) {
+                                AineObj *stub_arg = stub;
+                                Reg click_args[2];
+                                click_args[0].kind = REG_OBJ;
+                                click_args[0].obj  = listener;
+                                click_args[1].kind = REG_OBJ;
+                                click_args[1].obj  = stub_arg;
+                                exec_method(interp, listener->class_desc,
+                                            "onClick", click_args, 2, 0, NULL);
+                            }
+                        }
+                    }
+                }
+            }
+
             Reg args[2];
             args[0] = *this_reg;
             reg_set_obj(&args[1], me);
@@ -1120,8 +1167,9 @@ static void activity_event_loop(AineInterp *interp,
             int had_input = dispatch_input_events(interp, class_descriptor, this_reg);
 
             /* onDraw dispatch: if the content view was invalidated, call onDraw */
-            AineObj *view = jni_get_content_view();
-            if (view && view->class_desc && jni_pop_invalidated()) {
+            AineObj      *view        = jni_get_content_view();
+            AineViewNode *layout_root = jni_get_layout_root();
+            if (view && jni_pop_invalidated()) {
                 /* 60 fps cap: if last frame was less than 16.67 ms ago, wait */
                 int64_t now = interp_now_ns();
                 if (last_draw_ns > 0) {
@@ -1134,18 +1182,26 @@ static void activity_event_loop(AineInterp *interp,
                         nanosleep(&ts, NULL);
                     }
                 }
-                static AineObj s_canvas = {
-                    .type = OBJ_USERCLASS,
-                    .class_desc = "Landroid/graphics/Canvas;"
-                };
-                Reg draw_args[2];
-                draw_args[0].kind = REG_OBJ; draw_args[0].obj = view;
-                draw_args[1].kind = REG_OBJ; draw_args[1].obj = &s_canvas;
 #ifdef __APPLE__
                 aine_canvas_begin_frame();
-#endif
-                exec_method(interp, view->class_desc, "onDraw", draw_args, 2, 0, NULL);
-#ifdef __APPLE__
+                if (layout_root) {
+                    /* XML layout app: measure + draw the view tree */
+                    int cw = aine_canvas_width();
+                    int ch = aine_canvas_height();
+                    aine_layout_measure(layout_root, 0.0f, 0.0f,
+                                        (float)cw, (float)ch);
+                    aine_layout_draw(layout_root);
+                } else if (view->class_desc) {
+                    /* Custom View subclass: dispatch onDraw */
+                    static AineObj s_canvas = {
+                        .type = OBJ_USERCLASS,
+                        .class_desc = "Landroid/graphics/Canvas;"
+                    };
+                    Reg draw_args[2];
+                    draw_args[0].kind = REG_OBJ; draw_args[0].obj = view;
+                    draw_args[1].kind = REG_OBJ; draw_args[1].obj = &s_canvas;
+                    exec_method(interp, view->class_desc, "onDraw", draw_args, 2, 0, NULL);
+                }
                 aine_canvas_end_frame();   /* marks dirty once for the complete frame */
 #endif
                 last_draw_ns  = interp_now_ns();
@@ -1177,13 +1233,22 @@ static void activity_event_loop(AineInterp *interp,
 
 // ── Public entry point ─────────────────────────────────────────────────────
 int interp_run_main(AineInterp *interp, const char *class_descriptor) {
-    int cdef_idx = dex_find_class(interp->df, class_descriptor);
+    /* Search all DEX files for the entry class */
+    const DexFile *found_df = NULL;
+    int cdef_idx = -1;
+    int total_dfs = 1 + interp->n_extra_dfs;
+    for (int dfi = 0; dfi < total_dfs && cdef_idx < 0; dfi++) {
+        const DexFile *df = (dfi == 0) ? interp->df : interp->extra_dfs[dfi - 1];
+        int idx = dex_find_class(df, class_descriptor);
+        if (idx >= 0) { found_df = df; cdef_idx = idx; }
+    }
     if (cdef_idx < 0) {
         fprintf(stderr, "[aine-dalvik] class not found: %s\n", class_descriptor);
         return 1;
     }
+    interp->cur_df = found_df;   /* set for initial method dispatch */
 
-    int method_idx = dex_find_method(interp->df, cdef_idx,
+    int method_idx = dex_find_method(found_df, cdef_idx,
                                      "main", "([Ljava/lang/String;)V");
     if (method_idx < 0) {
         /* No main() — try Activity lifecycle mode (onCreate → … → onDestroy) */
@@ -1212,7 +1277,7 @@ int interp_run_main(AineInterp *interp, const char *class_descriptor) {
         return 0;
     }
 
-    const DexCodeItem *ci = dex_code_item(interp->df, cdef_idx, method_idx);
+    const DexCodeItem *ci = dex_code_item(found_df, cdef_idx, method_idx);
     if (!ci) {
         fprintf(stderr, "[aine-dalvik] main() has no code\n");
         return 1;

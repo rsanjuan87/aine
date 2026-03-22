@@ -39,6 +39,41 @@ static int      g_view_dirty   = 0;
 AineObj *jni_get_content_view(void) { return g_content_view; }
 int      jni_pop_invalidated(void)  { int v = g_view_dirty; g_view_dirty = 0; return v; }
 
+/* ── XML layout support ─────────────────────────────────────────────── */
+static AineResMap   *g_res_map    = NULL;
+static AineViewNode *g_layout_root = NULL;
+
+int jni_set_res_dir(const char *dir) {
+    if (g_res_map) { aine_res_free(g_res_map); g_res_map = NULL; }
+    g_res_map = aine_res_load(dir);
+    return g_res_map ? 1 : 0;
+}
+
+AineViewNode *jni_get_layout_root(void) { return g_layout_root; }
+
+/* ── View-stub registry: AineObj* stubs returned by Activity.findViewById() */
+#define VIEW_STUB_MAX 64
+static struct { int res_id; AineObj *stub; } g_view_stubs[VIEW_STUB_MAX];
+static int g_view_stub_count = 0;
+
+static void register_view_stub(int res_id, AineObj *stub) {
+    if (!stub || !res_id) return;
+    for (int i = 0; i < g_view_stub_count; i++) {
+        if (g_view_stubs[i].res_id == res_id) { g_view_stubs[i].stub = stub; return; }
+    }
+    if (g_view_stub_count < VIEW_STUB_MAX) {
+        g_view_stubs[g_view_stub_count].res_id = res_id;
+        g_view_stubs[g_view_stub_count].stub   = stub;
+        g_view_stub_count++;
+    }
+}
+
+AineObj *jni_get_view_stub(int res_id) {
+    for (int i = 0; i < g_view_stub_count; i++)
+        if (g_view_stubs[i].res_id == res_id) return g_view_stubs[i].stub;
+    return NULL;
+}
+
 // ── Static field singletons ──────────────────────────────────────────────
 static AineObj g_system_out = { .type = OBJ_PRINTSTREAM };
 static AineObj g_system_err = { .type = OBJ_PRINTSTREAM };
@@ -779,9 +814,30 @@ JniResult jni_dispatch(const char *class_desc,
                     g_content_view = args[0];
                     g_view_dirty   = 1;   /* trigger initial onDraw */
                 } else {
-                    /* int layout resource ID — create a synthetic content view */
-                    const char *lid = args[0]->str ? args[0]->str : "0";
-                    fprintf(stderr, "[aine-ui] setContentView(layout_id=%s)\n", lid);
+                    /* int layout resource ID — inflate from XML resource map */
+                    uint32_t res_id = (uint32_t)arg_prim(args[0]);
+                    if (g_res_map) {
+                        AineViewNode *root = aine_layout_inflate(g_res_map, res_id);
+                        if (root) {
+                            if (g_layout_root) aine_layout_free(g_layout_root);
+                            g_layout_root = root;
+                            /* Synthetic content-view stub so the event loop draws */
+                            static AineObj s_layout_cv = {
+                                .type = OBJ_USERCLASS,
+                                .class_desc = "Laine/Layout;"
+                            };
+                            g_content_view = &s_layout_cv;
+                            g_view_dirty   = 1;
+                            fprintf(stderr, "[aine-ui] setContentView(0x%x) inflated\n",
+                                    res_id);
+                        } else {
+                            fprintf(stderr, "[aine-ui] setContentView(0x%x) no XML\n",
+                                    res_id);
+                        }
+                    } else {
+                        fprintf(stderr, "[aine-ui] setContentView(0x%x) no res map\n",
+                                res_id);
+                    }
                 }
             }
             return res;
@@ -1369,12 +1425,16 @@ JniResult jni_dispatch(const char *class_desc,
         }
         if (!strcmp(method_name, "findViewById") ||
             !strcmp(method_name, "requireViewById")) {
-            /* Return a generic View stub — class_desc set to type of caller */
+            /* Return a generic View stub with res_id stored for setText/onClick */
             AineObj *view = calloc(1, sizeof(AineObj));
             view->type = OBJ_USERCLASS;
             view->class_desc = "Landroid/view/View;";
-            if (nargs >= 1 && args[0])
+            if (nargs >= 1 && args[0]) {
                 heap_iput_obj(view, "__resid__", args[0]);
+                int rid = (int)arg_prim(args[0]);
+                /* Register so click dispatch can find this stub by res_id */
+                register_view_stub(rid, view);
+            }
             res.is_void = 0; res.obj = view; return res;
         }
         if (!strcmp(method_name, "getActionBar") ||
@@ -1660,6 +1720,18 @@ JniResult jni_dispatch(const char *class_desc,
                 const char *t = args[0]->str ? args[0]->str : "";
                 fprintf(stderr, "[aine-ui] setText: \"%s\"\n", t);
                 heap_iput_obj(this_obj, "text", args[0]);
+                /* Propagate to layout node if this is a view stub with __resid__ */
+                if (g_layout_root) {
+                    AineObj *rid_obj = heap_iget_obj(this_obj, "__resid__");
+                    if (rid_obj) {
+                        int rid = (int)arg_prim(rid_obj);
+                        AineViewNode *node = aine_layout_find_by_id(g_layout_root, rid);
+                        if (node) {
+                            aine_layout_set_text(node, t);
+                            g_view_dirty = 1;   /* trigger redraw */
+                        }
+                    }
+                }
             }
             return res;
         }
@@ -2222,8 +2294,18 @@ JniResult jni_dispatch(const char *class_desc,
                 g_content_view = args[0];
                 g_view_dirty   = 1;
             } else {
-                const char *lid = args[0]->str ? args[0]->str : "0";
-                fprintf(stderr, "[aine-ui] setContentView(layout_id=%s)\n", lid);
+                uint32_t res_id2 = (uint32_t)arg_prim(args[0]);
+                if (g_res_map) {
+                    AineViewNode *root2 = aine_layout_inflate(g_res_map, res_id2);
+                    if (root2) {
+                        if (g_layout_root) aine_layout_free(g_layout_root);
+                        g_layout_root = root2;
+                        static AineObj s_layout_cv2 = {
+                            .type = OBJ_USERCLASS, .class_desc = "Laine/Layout;" };
+                        g_content_view = &s_layout_cv2;
+                        g_view_dirty   = 1;
+                    }
+                }
             }
         }
         return res;
@@ -2238,7 +2320,12 @@ JniResult jni_dispatch(const char *class_desc,
     }
     if (!strcmp(method_name, "requireViewById") || !strcmp(method_name, "findViewById")) {
         AineObj *v = calloc(1, sizeof(AineObj)); v->type = OBJ_USERCLASS;
-        v->class_desc = "Landroid/view/View;"; res.is_void = 0; res.obj = v; return res;
+        v->class_desc = "Landroid/view/View;";
+        if (nargs >= 1 && args[0]) {
+            heap_iput_obj(v, "__resid__", args[0]);
+            register_view_stub((int)arg_prim(args[0]), v);
+        }
+        res.is_void = 0; res.obj = v; return res;
     }
     if (!strcmp(method_name, "getLayoutInflater") || !strcmp(method_name, "getMenuInflater")) {
         static AineObj g_inflater2 = { .type = OBJ_NULL };

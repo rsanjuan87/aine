@@ -14,6 +14,7 @@
 
 #include "dex.h"
 #include "interp.h"
+#include "jni.h"
 #include "window.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <dirent.h>
 
 static void usage(const char *argv0) {
     fprintf(stderr,
@@ -81,12 +83,75 @@ int main(int argc, char *argv[]) {
     close(fd);
     if (mem == MAP_FAILED) { perror("mmap"); return 1; }
 
-    // Parse DEX
+    // Parse primary DEX
     DexFile df;
     if (dex_open(&df, (const uint8_t *)mem, sz) != 0) {
         fprintf(stderr, "[aine-dalvik] %s: not a valid DEX file\n", dex_path);
         munmap(mem, sz);
         return 1;
+    }
+
+    // Derive the directory containing the primary DEX for companion-file lookup
+    char dex_dir[512] = ".";
+    {
+        const char *last_slash = strrchr(dex_path, '/');
+        if (last_slash) {
+            size_t dir_len = (size_t)(last_slash - dex_path);
+            if (dir_len < sizeof(dex_dir) - 1) {
+                memcpy(dex_dir, dex_path, dir_len);
+                dex_dir[dir_len] = 0;
+            }
+        }
+    }
+
+    // Load resource companion file (aine-res.txt) from DEX directory
+    jni_set_res_dir(dex_dir);
+
+    // Load additional classesN.dex files from the same directory (multi-DEX)
+    // Track extra allocations for cleanup
+#define MAX_EXTRA_DEX 8
+    static DexFile  extra_dfs[MAX_EXTRA_DEX];
+    static void    *extra_mems[MAX_EXTRA_DEX];
+    static size_t   extra_szs[MAX_EXTRA_DEX];
+    int n_extra = 0;
+
+    // Convert primary DEX basename: if it is "classes.dex", also load classes2..8.dex;
+    // if it's "classes3.dex", load all others as extras.
+    {
+        const char *pbase = strrchr(dex_path, '/');
+        pbase = pbase ? pbase + 1 : dex_path;
+        // Only do multi-DEX if primary is named classesN.dex
+        if (strncmp(pbase, "classes", 7) == 0) {
+            for (int idx = 1; idx <= 8 && n_extra < MAX_EXTRA_DEX; idx++) {
+                char extra_path[640];
+                if (idx == 1)
+                    snprintf(extra_path, sizeof(extra_path), "%s/classes.dex", dex_dir);
+                else
+                    snprintf(extra_path, sizeof(extra_path), "%s/classes%d.dex",
+                             dex_dir, idx);
+
+                // Skip the primary DEX
+                if (strcmp(extra_path, dex_path) == 0) continue;
+
+                int xfd = open(extra_path, O_RDONLY);
+                if (xfd < 0) continue;          /* file doesn't exist — skip */
+                struct stat xst;
+                if (fstat(xfd, &xst) < 0) { close(xfd); continue; }
+                size_t xsz = (size_t)xst.st_size;
+                void *xmem = mmap(NULL, xsz, PROT_READ, MAP_PRIVATE, xfd, 0);
+                close(xfd);
+                if (xmem == MAP_FAILED) continue;
+                if (dex_open(&extra_dfs[n_extra],
+                             (const uint8_t *)xmem, xsz) != 0) {
+                    munmap(xmem, xsz);
+                    continue;
+                }
+                extra_mems[n_extra] = xmem;
+                extra_szs[n_extra]  = xsz;
+                fprintf(stderr, "[aine-dalvik] loaded extra DEX: %s\n", extra_path);
+                n_extra++;
+            }
+        }
     }
 
     // Convert class name to DEX descriptor: "HelloWorld" → "LHelloWorld;"
@@ -104,6 +169,8 @@ int main(int argc, char *argv[]) {
 
     // Run
     AineInterp *interp = interp_new(&df);
+    for (int i = 0; i < n_extra; i++)
+        interp_add_dex(interp, &extra_dfs[i]);
     if (max_frames > 0)
         interp_set_max_frames(max_frames);
     int ret;
@@ -115,5 +182,6 @@ int main(int argc, char *argv[]) {
     }
     interp_free(interp);
     munmap(mem, sz);
+    for (int i = 0; i < n_extra; i++) munmap(extra_mems[i], extra_szs[i]);
     return ret;
 }
